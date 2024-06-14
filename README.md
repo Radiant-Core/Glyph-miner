@@ -6,6 +6,10 @@ Requires a browser that supports WebGPU.
 
 A temporary wallet will be created that must be funded to pay transaction fees. Minted tokens can be sent to any address.
 
+## Roadmap
+
+- Replace temporary wallet with browser extension
+
 ## Getting Started
 
 ### Install
