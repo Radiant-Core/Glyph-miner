@@ -22,9 +22,11 @@ export default function TokenDetails() {
       <Flex
         bg="bg.100"
         mt={2}
+        p={4}
         alignItems="center"
         justifyContent="center"
-        height="56px"
+        minHeight="56px"
+        textAlign="center"
       >
         No mining contract loaded. Enter a contract address or select a contract
         from the list.
@@ -48,6 +50,7 @@ export default function TokenDetails() {
       alignItems="center"
       justifyContent="center"
       gap={4}
+      flexWrap={{ base: "wrap", md: "initial" }}
     >
       {hasImage ? (
         <TokenImage type={type} file={file.b} />

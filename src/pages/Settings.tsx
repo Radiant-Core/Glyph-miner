@@ -92,7 +92,11 @@ export default function Settings() {
     <>
       <Box bg="bg.300">
         <Container maxW="container.lg">
-          <Flex justifyContent="space-between" h="128px" alignItems="center">
+          <Flex
+            justifyContent="space-between"
+            h={{ base: "64px", md: "128px" }}
+            alignItems="center"
+          >
             <Heading size="lg" fontWeight="400">
               Settings
             </Heading>

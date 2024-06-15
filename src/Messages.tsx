@@ -46,6 +46,7 @@ function Line({ children }: PropsWithChildren) {
       gap={4}
       py={1}
       fontSize="medium"
+      flexWrap={{ base: "wrap", md: "initial" }}
     >
       {children}
     </Flex>

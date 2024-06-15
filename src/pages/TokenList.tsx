@@ -22,6 +22,7 @@ import { MAX_TARGET } from "../pow";
 import { FaQuestionCircle } from "react-icons/fa";
 import { TokenImage } from "../TokenDetails";
 import { CloseIcon } from "@chakra-ui/icons";
+import { LuRefreshCw } from "react-icons/lu";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import Pagination from "../Pagination";
 import { reverseRef } from "../utils";
@@ -101,11 +102,30 @@ export default function TokenList() {
     <>
       <Box bg="bg.300">
         <Container maxW="container.lg">
-          <Flex justifyContent="space-between" h="128px" alignItems="center">
-            <Heading size="lg" fontWeight="400" flexGrow={1}>
+          <Flex
+            justifyContent="space-between"
+            h={{ base: "64px", md: "128px" }}
+            alignItems="center"
+          >
+            <Heading
+              size={{ base: "md", md: "lg" }}
+              fontWeight="400"
+              flexGrow={1}
+            >
               Active Mining Contracts
             </Heading>
-            <Button onClick={refresh}>Refresh List</Button>
+            <IconButton
+              icon={<Icon as={LuRefreshCw} />}
+              aria-label="Refresh list"
+              display={{ base: "flex", md: "none" }}
+            />
+            <Button
+              onClick={refresh}
+              leftIcon={<Icon as={LuRefreshCw} />}
+              display={{ base: "none", md: "flex" }}
+            >
+              Refresh List
+            </Button>
             <IconButton
               icon={<CloseIcon />}
               as={Link}
@@ -117,25 +137,27 @@ export default function TokenList() {
         </Container>
       </Box>
 
-      <Container maxW="container.lg" py={8}>
-        <Table sx={{ borderCollapse: "separate", borderSpacing: "0 4px" }}>
-          <Thead>
-            <Tr>
-              <Th>Name</Th>
-              <Th>ID</Th>
-              <Th isNumeric>Claimed</Th>
-              <Th isNumeric>Reward</Th>
-              <Th isNumeric>Difficulty</Th>
-              <Th></Th>
-            </Tr>
-          </Thead>
-          <Tbody>
-            {tokens &&
-              tokens.map((token) => (
-                <TokenRow key={token.contract.contractRef} token={token} />
-              ))}
-          </Tbody>
-        </Table>
+      <Container maxW="container.lg" py={8} px={0}>
+        <Box width="100%" overflowY="auto">
+          <Table sx={{ borderCollapse: "separate", borderSpacing: "0 4px" }}>
+            <Thead>
+              <Tr>
+                <Th>Name</Th>
+                <Th>ID</Th>
+                <Th isNumeric>Claimed</Th>
+                <Th isNumeric>Reward</Th>
+                <Th isNumeric>Difficulty</Th>
+                <Th></Th>
+              </Tr>
+            </Thead>
+            <Tbody>
+              {tokens &&
+                tokens.map((token) => (
+                  <TokenRow key={token.contract.contractRef} token={token} />
+                ))}
+            </Tbody>
+          </Table>
+        </Box>
         {!tokens && (
           <Center my={16}>
             <Spinner size="xl" />
@@ -144,6 +166,7 @@ export default function TokenList() {
         {tokens && (
           <Pagination
             mt={4}
+            mr={4}
             startUrl="/tokens"
             page={page}
             prevUrl={page > 0 ? `/tokens/${page - 1}` : undefined}

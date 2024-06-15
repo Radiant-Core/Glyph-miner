@@ -37,6 +37,7 @@ import "../initGpu";
 import "../initWallet";
 import "../index.css";
 import { addMessage } from "../message";
+import BottomBar from "../BottomBar";
 
 export default function Miner() {
   useSignals();
@@ -83,11 +84,20 @@ export default function Miner() {
   return (
     <>
       <TopBar />
-      <Box bg="bg.300">
+      <BottomBar />
+      <Box bg="bg.300" mt="56px">
         <Container maxW="container.lg">
           <form onSubmit={changeToken}>
             <Flex gap={4} mx="auto" py={4}>
+              <IconButton
+                display={{ base: "flex", sm: "none" }}
+                as={Link}
+                to="/tokens"
+                icon={<Icon as={TbListDetails} />}
+                aria-label="Contract list"
+              />
               <Button
+                display={{ base: "none", sm: "flex" }}
                 as={Link}
                 to="/tokens"
                 leftIcon={<Icon as={TbListDetails} />}
@@ -163,20 +173,15 @@ export default function Miner() {
                   alignItems="center"
                   justifyContent="space-between"
                   gap={4}
+                  flexWrap={{ base: "wrap", md: "initial" }}
                 >
-                  <Icon as={TbPick} boxSize={6} color="gray.500" />
-                  <Box flexGrow={1}>
-                    Mine to
-                    <Text
-                      bgColor="blackAlpha.400"
-                      as="span"
-                      px={1}
-                      ml={1}
-                      fontFamily="Overpass Mono Variable"
-                    >
+                  <Flex flexGrow={1} wordBreak="break-all" alignItems="center">
+                    <Icon as={TbPick} boxSize={6} color="gray.500" mr={2} />
+                    <Text>Mine to</Text>
+                    <Text bgColor="blackAlpha.400" as="span" px={1} ml={1}>
                       {mineToAddress.value}
                     </Text>
-                  </Box>
+                  </Flex>
                   <Box
                     borderRight="2px"
                     borderRightColor="whiteAlpha.400"
@@ -215,10 +220,12 @@ export default function Miner() {
             <Text fontSize="x-large" mb={2}>
               No GPU found
             </Text>
-            <Text>Please check your browser supports WebGPU</Text>
+            <Text textAlign="center">
+              Please check your browser supports WebGPU
+            </Text>
           </Flex>
         )}
-        <Center fontSize="small">
+        <Center fontSize="small" textAlign="center">
           <Link to="/license">
             Glyph Miner is distributed under the terms of the MIT License
           </Link>
