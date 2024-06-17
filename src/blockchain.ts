@@ -48,7 +48,8 @@ export enum ServerStatus {
 }
 export const server = signal(
   localStorage.getItem("server") ||
-    "wss://electrumx-testnet.radiant4people.com:53002"
+    // "wss://electrumx-testnet.radiant4people.com:53002"
+    "wss://electrumx.radiant4people.com:50012"
 );
 export const status = signal(ServerStatus.DISCONNECTED);
 let client: ElectrumWS;

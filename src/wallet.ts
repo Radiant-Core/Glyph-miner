@@ -29,7 +29,7 @@ function createKeys(mnemonic: string): Wallet | undefined {
     hdKey.derive(derivationPath).privateKey as Uint8Array
   ).toString("hex");
   if (!key) return;
-  const privKey = new PrivateKey(key, Networks.testnet);
+  const privKey = new PrivateKey(key, Networks.mainnet);
   const address = privKey?.toAddress().toString() as string;
 
   return { privKey, address, mnemonic };
