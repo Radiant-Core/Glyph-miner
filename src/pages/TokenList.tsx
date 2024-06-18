@@ -58,7 +58,7 @@ function TokenRow({
           ) : (
             <Icon as={FaQuestionCircle} boxSize={6} color="gray.500" />
           )}
-          {ticker}
+          {ticker.substring(0, 20)}
         </Flex>
       </Td>
       <Td>
