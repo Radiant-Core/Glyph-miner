@@ -50,8 +50,8 @@ dependencies:
     specifier: ^0.3.1
     version: 0.3.1(@babel/core@7.24.5)(react@18.3.1)
   '@radiantblockchain/radiantjs':
-    specifier: ^1.9.4
-    version: 1.9.4(patch_hash=varlpfijnui3jgpszthhiy72l4)
+    specifier: github:radiantblockchain/radiantjs
+    version: github.com/radiantblockchain/radiantjs/ffd54bfcf8cd8ac3e395ca39ce6e4a5e25afb9dc(patch_hash=varlpfijnui3jgpszthhiy72l4)
   '@scure/bip32':
     specifier: ^1.4.0
     version: 1.4.0
@@ -1974,21 +1974,6 @@ packages:
       react: 18.3.1
       use-sync-external-store: 1.2.0(react@18.3.1)
     dev: false
-
-  /@radiantblockchain/radiantjs@1.9.4(patch_hash=varlpfijnui3jgpszthhiy72l4):
-    resolution: {integrity: sha512-d9jelxUZVSXz1l3fQtlklDj0P+AdMOLErqz9T9xQDi775RhIxayt9qEzBEcUYGP8FCFCHjVr2sHqBgjdmeD4Dw==}
-    dependencies:
-      aes-js: 3.1.2
-      bn.js: 4.11.9
-      bs58: 4.0.1
-      clone-deep: 4.0.1
-      elliptic: 6.5.4
-      hash.js: 1.1.7
-      inherits: 2.0.3
-      js-sha512: 0.8.0
-      unorm: 1.4.1
-    dev: false
-    patched: true
 
   /@remix-run/router@1.16.1:
     resolution: {integrity: sha512-es2g3dq6Nb07iFxGk5GuHN20RwBZOsuDQN7izWIisUcv9r+d2C5jQxqmgkdebXgReWfiyUabcki6Fg77mSNrig==}
@@ -4284,3 +4269,21 @@ packages:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
     engines: {node: '>=10'}
     dev: true
+
+  github.com/radiantblockchain/radiantjs/ffd54bfcf8cd8ac3e395ca39ce6e4a5e25afb9dc(patch_hash=varlpfijnui3jgpszthhiy72l4):
+    resolution: {tarball: https://codeload.github.com/radiantblockchain/radiantjs/tar.gz/ffd54bfcf8cd8ac3e395ca39ce6e4a5e25afb9dc}
+    id: github.com/radiantblockchain/radiantjs/ffd54bfcf8cd8ac3e395ca39ce6e4a5e25afb9dc
+    name: '@radiantblockchain/radiantjs'
+    version: 1.9.4
+    dependencies:
+      aes-js: 3.1.2
+      bn.js: 4.11.9
+      bs58: 4.0.1
+      clone-deep: 4.0.1
+      elliptic: 6.5.4
+      hash.js: 1.1.7
+      inherits: 2.0.3
+      js-sha512: 0.8.0
+      unorm: 1.4.1
+    dev: false
+    patched: true
