@@ -423,7 +423,7 @@ async function fetchContractUtxos() {
   const unspent = (
     (await client.request(
       "blockchain.codescripthash.listunspent",
-      "52ffab6363116bf4b897a65a6e12d9c4b9bfa91482c8c43b04a0b88453964a8f"
+      "9b817b282e21cce79e6a627ed9ba27f06899ca1f3dfa727c47706ba731f9e61e" // SHA-256 of mining contract
     )) as Utxo[]
   ).filter(
     (u) => u.refs?.length === 2 && u.refs[0].type === "single" && u.refs[1].type
@@ -505,7 +505,7 @@ export async function fetchDeployments(
 
 function parseDmintScript(script: string): string {
   const pattern =
-    /^(.*)bdc0c855797ea8597959797ea87e5a7a7eaabc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e8867547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d5279de519d75686d7551$/;
+    /^(.*)bdc0c855797ea8597959797ea87e5a7a7eaabc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551$/;
   const [, stateScript] = script.match(pattern) || [];
   return stateScript;
 }
@@ -565,7 +565,7 @@ function dMintScript({
     reward
   )}${pushMinimal(
     target
-  )}bdc0c855797ea8597959797ea87e5a7a7eaabc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e8867547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d5279de519d75686d7551`;
+  )}bdc0c855797ea8597959797ea87e5a7a7eaabc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551`;
 }
 
 function burnScript(ref: string) {
@@ -714,7 +714,7 @@ export class Blockchain {
               miningStatus.value = "stop";
               addMessage({
                 type: "minted-out",
-                ref: contract.value.contractRef,
+                ref: reverseRef(contract.value.contractRef),
               });
 
               // No contract data exists in burn output so use existing data and set height to max
