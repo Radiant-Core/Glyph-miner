@@ -2,6 +2,7 @@ import { PrivateKey } from "@radiantblockchain/radiantjs";
 
 export type Contract = {
   location: string;
+  outputIndex: number;
   height: bigint;
   contractRef: string;
   tokenRef: string;
@@ -49,47 +50,49 @@ export type Utxo = {
   refs?: { ref: string; type: "single" | "normal" }[];
 };
 
-export type Message = {
-  id: string;
-  date: string;
-} & (
-  | {
+export type Message =
+  & {
+    id: string;
+    date: string;
+  }
+  & (
+    | {
       type: "found";
       nonce: string;
     }
-  | {
+    | {
       type: "accept";
       nonce: string;
       txid: string;
       msg: string;
     }
-  | {
+    | {
       type: "reject";
       nonce: string;
     }
-  | {
+    | {
       type: "general";
       msg: string;
     }
-  | {
+    | {
       type: "new-location";
       txid: string;
       msg: string;
     }
-  | {
+    | {
       type: "loaded" | "minted-out";
       ref: string;
       msg: string;
     }
-  | {
+    | {
       type: "not-found";
       ref: string;
     }
-  | {
+    | {
       type: "mint-time";
       seconds: number;
     }
-  | {
+    | {
       type: "start" | "stop";
     }
-);
+  );

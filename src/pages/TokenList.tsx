@@ -83,6 +83,7 @@ export default function TokenList() {
   const page = pageParam ? parseInt(pageParam, 10) : 0;
 
   useEffect(() => {
+    setTokens(null);
     (async () => {
       const results = await fetchDeployments(page);
       setTokens(results.tokens);

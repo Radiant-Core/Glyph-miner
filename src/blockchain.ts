@@ -1,13 +1,13 @@
 import localforage from "localforage";
 import {
-  vmNumberToBigInt,
-  pushNumberOpcodeToNumber,
-  Opcodes,
+  base58AddressToLockingBytecode,
   bigIntToVmNumber,
   encodeDataPush,
   numberToBinUint32LEClamped,
-  base58AddressToLockingBytecode,
+  Opcodes,
+  pushNumberOpcodeToNumber,
   swapEndianness,
+  vmNumberToBigInt,
 } from "@bitauth/libauth";
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
@@ -17,9 +17,9 @@ import type { Contract, Token, Utxo, Work } from "./types";
 import { decodeGlyph } from "./glyph";
 import {
   accepted,
-  glyph,
   balance,
   contract,
+  glyph,
   mineToAddress,
   miningStatus,
   mintMessage,
@@ -34,6 +34,7 @@ import { addMessage } from "./message";
 import { mintMessageScript } from "./pow";
 import miner from "./miner";
 import { Buffer } from "buffer";
+import { reverseRef } from "./utils";
 
 const FEE_PER_KB = 5000000;
 
@@ -93,21 +94,24 @@ effect(() => {
   }
 });
 
-async function parseContractTx(tx: Transaction) {
-  const stateScripts: string[] = [];
+async function parseContractTx(tx: Transaction, ref: string) {
+  const stateScripts: [number, string][] = [];
   const burns: string[] = [];
   const messages: string[] = [];
 
-  tx.outputs.forEach((o) => {
+  tx.outputs.forEach((o, i) => {
     const hex = o.script.toHex();
     const dmint = parseDmintScript(hex);
     if (dmint) {
-      return stateScripts.push(dmint);
+      return stateScripts.push([i, dmint]);
     }
 
     const burn = parseBurnScript(hex);
     if (burn) {
-      return burns.push(burn);
+      if (burn === ref) {
+        burns.push(burn);
+      }
+      return;
     }
 
     const msg = parseMessageScript(hex);
@@ -121,13 +125,17 @@ async function parseContractTx(tx: Transaction) {
 
   // State script:
   // height OP_PUSHINPUTREF contractRef OP_PUSHINPUTREF tokenRef maxHeight reward target
-  const params = stateScripts
-    .map((script) => {
+  const contracts = stateScripts
+    .map(([outputIndex, script]) => {
       const opcodes = Script.fromHex(script).toASM().split(" ");
       const [op1, contractRef] = opcodes.splice(1, 2);
       const [op2, tokenRef] = opcodes.splice(1, 2);
 
-      if (op1 !== "OP_PUSHINPUTREFSINGLETON" || op2 !== "OP_PUSHINPUTREF") {
+      if (
+        op1 !== "OP_PUSHINPUTREFSINGLETON" ||
+        op2 !== "OP_PUSHINPUTREF" ||
+        contractRef !== ref
+      ) {
         return;
       }
 
@@ -141,6 +149,7 @@ async function parseContractTx(tx: Transaction) {
         state: "active",
         params: {
           location: tx.id,
+          outputIndex,
           height,
           contractRef,
           tokenRef,
@@ -154,35 +163,39 @@ async function parseContractTx(tx: Transaction) {
     })
     .filter(Boolean) as { state: "active"; params: Contract }[];
 
-  if (!params.length) {
+  if (!contracts.length) {
     if (burns.length) {
-      return { state: "burn" as const, ref: burns[0], params: { message } };
+      return {
+        state: "burn" as const,
+        ref,
+        params: { message },
+      };
     }
     console.debug("dmint contract not found");
     return;
   }
 
-  // TODO return all contracts
-  return params[0];
+  return contracts[0];
 }
 
-async function fetchToken(ref: string) {
-  if (!ref.match(/^[0-9a-f]{64}[0-9]{8}$/)) {
+async function fetchToken(contractRef: string) {
+  if (!contractRef.match(/^[0-9a-f]{64}[0-9]{8}$/)) {
     console.debug("Not a ref");
     return;
   }
 
-  console.debug(`Fetching ${ref}`);
+  console.debug(`Fetching ${contractRef}`);
+  const refLe = reverseRef(contractRef);
 
-  const refTxids = await fetchRef(ref);
+  const refTxids = await fetchRef(contractRef);
   if (!refTxids.length) {
-    console.debug("Ref not found:", ref);
+    console.debug("Ref not found:", contractRef);
     return;
   }
 
   const revealTxid = refTxids[0].tx_hash;
   const revealTx = await fetchTx(revealTxid);
-  const revealParams = await parseContractTx(revealTx);
+  const revealParams = await parseContractTx(revealTx, refLe);
 
   if (!revealParams || revealParams.state === "burn") {
     return;
@@ -193,7 +206,7 @@ async function fetchToken(ref: string) {
   const locTxid = refTxids[1].tx_hash;
   const fresh = revealTxid === locTxid;
   const locTx = fresh ? revealTx : await fetchTx(locTxid);
-  const locParams = fresh ? revealParams : await parseContractTx(locTx);
+  const locParams = fresh ? revealParams : await parseContractTx(locTx, refLe);
   if (!locParams) {
     return;
   }
@@ -257,7 +270,7 @@ async function claimTokens(contract: Contract, work: Work, nonce: string) {
   tx.addInput(
     new Transaction.Input({
       prevTxId: contract.location,
-      outputIndex: 0,
+      outputIndex: contract.outputIndex,
       script: new Script(),
       output: new Transaction.Output({
         script: contract.script,
@@ -458,7 +471,9 @@ export async function fetchDeployments(
   }
 
   // TODO implement pagination in ElectrumX
-  const all = await fetchContractUtxos();
+  const allKey = `tokens`;
+  const all =
+    (await localforage.getItem<Utxo[]>(allKey)) || (await fetchContractUtxos());
   const unspent = all.slice(
     page * RESULTS_PER_PAGE,
     (page + 1) * RESULTS_PER_PAGE
@@ -475,9 +490,11 @@ export async function fetchDeployments(
     buf.write(txid, 0, 32, "hex");
     buf.writeUInt32BE(vout, 32);
     const ref = buf.toString("hex");
-    const token = await fetchToken(ref);
+    const cachedToken = await localforage.getItem<Token>(ref);
+    const token = cachedToken || (await fetchToken(ref));
     if (token) {
       tokens.push(token);
+      localforage.setItem(ref, token);
     }
   }
 
@@ -509,8 +526,9 @@ function parseMessageScript(script: string): string {
     buf?: Uint8Array;
   }[];
 
-  if (chunks.length === 0 || !chunks[0].buf || chunks[0].buf.byteLength === 0)
+  if (chunks.length === 0 || !chunks[0].buf || chunks[0].buf.byteLength === 0) {
     return "";
+  }
 
   return new TextDecoder().decode(chunks[0].buf);
 }
@@ -614,6 +632,7 @@ export class Blockchain {
           ...contract.value,
           height,
           location: txid,
+          outputIndex: 0,
         };
         miningStatus.value = "change";
       }
@@ -664,9 +683,7 @@ export class Blockchain {
 
     // Subscribe to the singleton so we know when the contract moves
     // Change ref to little-endian
-    const refLe = `${swapEndianness(ref.substring(0, 64))}${swapEndianness(
-      ref.substring(65)
-    )}`;
+    const refLe = reverseRef(ref);
     const sh = scriptHash(hexToBytes(refLe));
     client.subscribe(
       "blockchain.scripthash",
@@ -678,7 +695,7 @@ export class Blockchain {
             console.debug(`New contract location ${location}`);
             //contract.value.location = location;
             const locTx = await fetchTx(location);
-            const parsed = await parseContractTx(locTx);
+            const parsed = await parseContractTx(locTx, refLe);
 
             if (parsed?.state && parsed.params.message) {
               addMessage({

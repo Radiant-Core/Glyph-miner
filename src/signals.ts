@@ -1,6 +1,6 @@
 import { computed, effect, signal } from "@preact/signals-react";
-import { Glyph, Contract, Message, Utxo, Wallet } from "./types";
-import { createWork, calcTimeToMine } from "./pow";
+import { Contract, Glyph, Message, Utxo, Wallet } from "./types";
+import { calcTimeToMine, createWork } from "./pow";
 import { addMessage } from "./message";
 
 export const messages = signal<Message[]>([]);
