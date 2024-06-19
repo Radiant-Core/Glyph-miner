@@ -429,7 +429,7 @@ async function fetchCuratedContracts() {
 }
 
 // Needs improvement to remove spam
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+/*
 async function fetchContractUtxos() {
   const cache = await localforage.getItem("unspent");
   if (cache) {
@@ -448,6 +448,7 @@ async function fetchContractUtxos() {
   localforage.setItem("unspent", unspent);
   return unspent;
 }
+*/
 
 async function fetchTx(txid: string) {
   const hex = await client.request("blockchain.transaction.get", txid);
