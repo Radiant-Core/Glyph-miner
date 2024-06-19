@@ -1,28 +1,34 @@
 import { CloseIcon } from "@chakra-ui/icons";
 import {
-  Button,
-  Container,
   Alert,
   AlertIcon,
   Box,
-  Flex,
+  Button,
+  Center,
   Code,
+  Container,
+  Flex,
+  FormControl,
+  FormHelperText,
+  FormLabel,
   Heading,
   IconButton,
+  Input,
+  Select,
   useClipboard,
   useToast,
-  Input,
-  FormControl,
-  FormLabel,
-  FormHelperText,
-  Center,
-  Select,
 } from "@chakra-ui/react";
 import { QRCodeSVG } from "qrcode.react";
 import { useReducer, useState } from "react";
 import { CheckIcon, CopyIcon } from "@chakra-ui/icons";
 import { useSignals } from "@preact/signals-react/runtime";
-import { hideMessages, mineToAddress, mintMessage, wallet } from "../signals";
+import {
+  contractsUrl,
+  hideMessages,
+  mineToAddress,
+  mintMessage,
+  wallet,
+} from "../signals";
 import Balance from "../Balance";
 import { server, sweepWallet } from "../blockchain";
 import { Script } from "@radiantblockchain/radiantjs";
@@ -54,6 +60,7 @@ export default function Settings() {
     mintMessage: mintMessage.value,
     hideMessages: hideMessages.value ? "1" : "",
     server: server.value,
+    contractsUrl: contractsUrl.value,
   });
   const onFormChange = ({
     target: { name, value },
@@ -76,11 +83,13 @@ export default function Settings() {
     mineToAddress.value = form.mineToAddress;
     mintMessage.value = form.mintMessage;
     hideMessages.value = form.hideMessages === "1";
+    contractsUrl.value = form.contractsUrl;
     server.value = form.server;
     localStorage.setItem("mineToAddress", form.mineToAddress);
     localStorage.setItem("mintMessage", form.mintMessage);
     localStorage.setItem("hideMessages", form.hideMessages);
     localStorage.setItem("server", form.server);
+    localStorage.setItem("contractsUrl", form.contractsUrl);
     toast({
       status: "success",
       description: "Saved",
@@ -154,6 +163,14 @@ export default function Settings() {
             <Input
               name="server"
               defaultValue={form.server}
+              onChange={onFormChange}
+            />
+          </FormControl>
+          <FormControl mb={4}>
+            <FormLabel>Contracts URL</FormLabel>
+            <Input
+              name="contractsUrl"
+              defaultValue={form.contractsUrl}
               onChange={onFormChange}
             />
           </FormControl>

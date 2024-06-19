@@ -17,6 +17,7 @@ export const mintMessage = signal("");
 export const hideMessages = signal(false);
 export const selectedContract = signal("");
 export const contract = signal<Contract | undefined>(undefined);
+export const contractsUrl = signal("");
 export const glyph = signal<Glyph | undefined>(undefined);
 export const work = computed(() => {
   if (!contract.value || !wallet.value?.address) return;

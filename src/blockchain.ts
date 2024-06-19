@@ -19,6 +19,7 @@ import {
   accepted,
   balance,
   contract,
+  contractsUrl,
   glyph,
   mineToAddress,
   miningStatus,
@@ -179,7 +180,7 @@ async function parseContractTx(tx: Transaction, ref: string) {
 }
 
 async function fetchToken(contractRef: string) {
-  if (!contractRef.match(/^[0-9a-f]{64}[0-9]{8}$/)) {
+  if (!contractRef.match(/^[0-9a-f]{64}[0-9a-f]{8}$/)) {
     console.debug("Not a ref");
     return;
   }
@@ -414,6 +415,21 @@ export async function sweepWallet() {
   await broadcast(hex);
 }
 
+// Temporary replacement for fetchContractUtxos
+async function fetchCuratedContracts() {
+  try {
+    const response = await fetch(contractsUrl.value);
+    if (!response.ok) {
+      return [];
+    }
+    return (await response.json()) as string[];
+  } catch {
+    return [];
+  }
+}
+
+// Needs improvement to remove spam
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function fetchContractUtxos() {
   const cache = await localforage.getItem("unspent");
   if (cache) {
@@ -461,29 +477,30 @@ export async function fetchDeployments(
     await localforage.clear();
   }
 
+  const allKey = "tokens";
   const cacheKey = `tokens-${page}`;
   const pageCache = await localforage.getItem(cacheKey);
   if (pageCache) {
-    const pages = Math.ceil(
-      ((await localforage.getItem("unspent")) as []).length / RESULTS_PER_PAGE
-    );
-    return { tokens: pageCache as Token[], pages };
+    const contractAddresses = await localforage.getItem<string[]>(allKey);
+    if (contractAddresses?.length) {
+      const pages = Math.ceil(contractAddresses.length / RESULTS_PER_PAGE);
+      return { tokens: pageCache as Token[], pages };
+    }
   }
 
   // TODO implement pagination in ElectrumX
-  const allKey = `tokens`;
   const all =
-    (await localforage.getItem<Utxo[]>(allKey)) || (await fetchContractUtxos());
-  const unspent = all.slice(
+    (await localforage.getItem<string[]>(allKey)) ||
+    (await fetchCuratedContracts());
+  const contracts = all.slice(
     page * RESULTS_PER_PAGE,
     (page + 1) * RESULTS_PER_PAGE
   );
 
   const tokens = [];
-  for (const { refs } of unspent) {
-    const singleton = refs?.[0].ref as string;
+  for (const singleton of contracts) {
     const txid = singleton.slice(0, 64);
-    const vout = parseInt(singleton.slice(65), 10);
+    const vout = parseInt(singleton.slice(65), 16);
 
     // Convert short format to big endian hex
     const buf = Buffer.alloc(36);
