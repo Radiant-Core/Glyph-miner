@@ -113,7 +113,7 @@ export default function TokenList() {
               fontWeight="400"
               flexGrow={1}
             >
-              Active Mining Contracts
+              Mining Contracts
             </Heading>
             <IconButton
               icon={<Icon as={LuRefreshCw} />}
