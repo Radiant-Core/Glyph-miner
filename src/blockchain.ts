@@ -729,7 +729,7 @@ export class Blockchain {
                 miningStatus.value = "change";
               }
             } else if (parsed?.state === "burn") {
-              miningStatus.value = "stop";
+              miner.stop();
               addMessage({
                 type: "minted-out",
                 ref: reverseRef(contract.value.contractRef),
