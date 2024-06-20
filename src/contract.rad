@@ -10,6 +10,7 @@ function (bytes4 nonce, bytes32 inputHash, bytes32 outputHash, int outputIndex) 
     int reward = REWARD;
     int target = TARGET;
     stateSeparator;
+    pushData(0x01); // Version 1
 
     // PoW
     bytes hash = hash256(
