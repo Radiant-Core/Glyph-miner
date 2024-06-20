@@ -6,6 +6,14 @@ import { gpu, hideMessages, messages } from "./signals";
 import ShortId from "./ShortId";
 import ShortRef from "./ShortRef";
 
+function formatDuration(seconds: number) {
+  if (seconds <= 60) {
+    return `${seconds} seconds`;
+  }
+  const minutes = parseFloat((seconds / 60).toFixed(2));
+  return `${minutes} minutes`;
+}
+
 function Id({ children }: PropsWithChildren) {
   return (
     <Text
@@ -132,8 +140,8 @@ export default function Messages() {
           )}
           {m.type === "mint-time" && (
             <div>
-              Estimated mint time on your {gpu.value || "GPU"} is {m.seconds}{" "}
-              seconds
+              Estimated mint time on your {gpu.value || "GPU"} is{" "}
+              {formatDuration(m.seconds)}
             </div>
           )}
           {m.type === "start" && <div>Mining started</div>}
