@@ -15,4 +15,4 @@ mintMessage.value =
 hideMessages.value = localStorage.getItem("hideMessages") === "1";
 contractsUrl.value =
   localStorage.getItem("contractsUrl") ||
-  "https://glyphs.radiant4people.org/contracts.json";
+  "https://glyph.radiant4people.com/contracts.json";
