@@ -51,7 +51,7 @@ export enum ServerStatus {
 export const server = signal(
   localStorage.getItem("server") ||
     //"wss://electrumx-testnet.radiant4people.com:53002",
-    "wss://electrumx.radiant4people.com:50022",
+    "wss://electrumx.radiant4people.com:50022"
 );
 export const status = signal(ServerStatus.DISCONNECTED);
 let client: ElectrumWS;
@@ -195,7 +195,7 @@ async function fetchToken(contractRef: string) {
   }
 
   const revealTxid = refTxids[0].tx_hash;
-  const revealTx = await fetchTx(revealTxid);
+  const revealTx = await fetchTx(revealTxid, false);
   const revealParams = await parseContractTx(revealTx, refLe);
 
   if (!revealParams || revealParams.state === "burn") {
@@ -206,7 +206,7 @@ async function fetchToken(contractRef: string) {
 
   const locTxid = refTxids[1].tx_hash;
   const fresh = revealTxid === locTxid;
-  const locTx = fresh ? revealTx : await fetchTx(locTxid);
+  const locTx = fresh ? revealTx : await fetchTx(locTxid, true);
   const locParams = fresh ? revealParams : await parseContractTx(locTx, refLe);
   if (!locParams) {
     return;
@@ -439,7 +439,7 @@ async function fetchContractUtxos() {
   const unspent = (
     (await client.request(
       "blockchain.codescripthash.listunspent",
-      "9b817b282e21cce79e6a627ed9ba27f06899ca1f3dfa727c47706ba731f9e61e" // SHA-256 of mining contract
+      "e8ed45cef15052dbe4b53274cd10a4c55c4065505cbb3420b6d1da20c365dad1" // SHA-256 of mining contract
     )) as Utxo[]
   ).filter(
     (u) => u.refs?.length === 2 && u.refs[0].type === "single" && u.refs[1].type
@@ -450,8 +450,13 @@ async function fetchContractUtxos() {
 }
 */
 
-async function fetchTx(txid: string) {
+async function fetchTx(txid: string, fresh: boolean) {
+  const cached = fresh ? undefined : await localforage.getItem<string>(txid);
+  if (cached) {
+    return new Transaction(cached);
+  }
   const hex = await client.request("blockchain.transaction.get", txid);
+  localforage.setItem(txid, hex);
   return new Transaction(hex);
 }
 
@@ -469,8 +474,9 @@ async function fetchRef(ref: string) {
   return [];
 }
 
-const RESULTS_PER_PAGE = 20;
+const RESULTS_PER_PAGE = 16;
 export async function fetchDeployments(
+  onProgress: (n: number) => undefined = () => undefined,
   page = 0,
   refresh = false
 ): Promise<{ tokens: Token[]; pages: number }> {
@@ -499,6 +505,7 @@ export async function fetchDeployments(
   );
 
   const tokens = [];
+  let i = 0;
   for (const singleton of contracts) {
     const txid = singleton.slice(0, 64);
     const vout = parseInt(singleton.slice(65), 16);
@@ -514,6 +521,7 @@ export async function fetchDeployments(
       tokens.push(token);
       localforage.setItem(ref, token);
     }
+    onProgress((++i / contracts.length) * 100);
   }
 
   localforage.setItem(cacheKey, tokens);
@@ -712,7 +720,7 @@ export class Blockchain {
           if (contract.value && location !== contract.value?.location) {
             console.debug(`New contract location ${location}`);
             //contract.value.location = location;
-            const locTx = await fetchTx(location);
+            const locTx = await fetchTx(location, true);
             const parsed = await parseContractTx(locTx, refLe);
 
             if (parsed?.state && parsed.params.message) {

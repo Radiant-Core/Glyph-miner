@@ -4,12 +4,12 @@ import {
   Box,
   Button,
   Center,
+  CircularProgress,
   Container,
   Flex,
   Heading,
   Icon,
   IconButton,
-  Spinner,
   Table,
   Tbody,
   Td,
@@ -81,22 +81,34 @@ export default function TokenList() {
   const { page: pageParam } = useParams();
   const [pages, setPages] = useState(0);
   const page = pageParam ? parseInt(pageParam, 10) : 0;
+  const [progress, setProgress] = useState<number>(0);
 
   useEffect(() => {
     setTokens(null);
     (async () => {
-      const results = await fetchDeployments(page);
+      const results = await fetchDeployments((n) => {
+        setProgress(n);
+      }, page);
       setTokens(results.tokens);
       setPages(results.pages);
+      setProgress(0);
     })();
   }, [page]);
 
   const refresh = async () => {
     setTokens(null);
     setPages(0);
-    const results = await fetchDeployments(0, true);
+    setProgress(0);
+    const results = await fetchDeployments(
+      (n) => {
+        setProgress(n);
+      },
+      0,
+      true
+    );
     setTokens(results.tokens);
     setPages(results.pages);
+    setProgress(0);
   };
 
   return (
@@ -161,7 +173,13 @@ export default function TokenList() {
         </Box>
         {!tokens && (
           <Center my={16}>
-            <Spinner size="xl" />
+            <CircularProgress
+              value={progress}
+              size="92px"
+              color="lightGreen.A200"
+              trackColor="bg.300"
+              thickness={12}
+            />
           </Center>
         )}
         {tokens && (
