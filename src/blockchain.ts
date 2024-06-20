@@ -35,7 +35,7 @@ import { addMessage } from "./message";
 import { mintMessageScript } from "./pow";
 import miner from "./miner";
 import { Buffer } from "buffer";
-import { reverseRef } from "./utils";
+import { isRef, reverseRef } from "./utils";
 
 const FEE_PER_KB = 5000000;
 
@@ -180,7 +180,7 @@ async function parseContractTx(tx: Transaction, ref: string) {
 }
 
 async function fetchToken(contractRef: string) {
-  if (!contractRef.match(/^[0-9a-f]{64}[0-9a-f]{8}$/)) {
+  if (!isRef(contractRef)) {
     console.debug("Not a ref");
     return;
   }

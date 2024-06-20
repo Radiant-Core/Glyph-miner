@@ -19,3 +19,7 @@ export function reverseRef(hex: string) {
   const ref = swapEndianness(hex.toLowerCase());
   return `${ref.substring(8)}${ref.substring(0, 8)}`;
 }
+
+export function isRef(ref: string) {
+  return ref.match(/^[0-9a-f]{64}[0-9a-f]{8}$/);
+}

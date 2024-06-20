@@ -11,6 +11,7 @@ import {
   Text,
   Center,
   Button,
+  useToast,
 } from "@chakra-ui/react";
 import { BsGpuCard } from "react-icons/bs";
 import { Search2Icon, SettingsIcon } from "@chakra-ui/icons";
@@ -38,18 +39,29 @@ import "../initWallet";
 import "../index.css";
 import { addMessage } from "../message";
 import BottomBar from "../BottomBar";
+import { isRef } from "../utils";
 
 export default function Miner() {
   useSignals();
+  const toast = useToast();
 
   const { start, stop } = miner;
   const refInput = useRef<HTMLInputElement>(null);
 
   const changeToken = async (event: React.FormEvent) => {
-    console.debug("Changing token");
     event.preventDefault();
+    const ref = (refInput.current?.value as string) || "";
+    if (!isRef(ref)) {
+      toast({
+        status: "error",
+        description: "Please enter a valid contract address",
+        variant: "subtle",
+      });
+      return;
+    }
+    console.debug("Changing token");
     stop();
-    await blockchain.changeToken((refInput.current?.value as string) || "");
+    await blockchain.changeToken(ref);
   };
 
   const startMining = () => {
