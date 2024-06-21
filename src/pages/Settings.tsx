@@ -15,6 +15,7 @@ import {
   IconButton,
   Input,
   Select,
+  Textarea,
   useClipboard,
   useToast,
 } from "@chakra-ui/react";
@@ -26,13 +27,16 @@ import {
   contractsUrl,
   hideMessages,
   mineToAddress,
+  miningStatus,
   mintMessage,
+  servers,
   wallet,
 } from "../signals";
 import Balance from "../Balance";
-import { server, sweepWallet } from "../blockchain";
+import { sweepWallet } from "../blockchain";
 import { Script } from "@radiantblockchain/radiantjs";
 import { Link } from "react-router-dom";
+import { connect } from "../client";
 
 export default function Settings() {
   useSignals();
@@ -59,12 +63,14 @@ export default function Settings() {
     mineToAddress: mineToAddress.value,
     mintMessage: mintMessage.value,
     hideMessages: hideMessages.value ? "1" : "",
-    server: server.value,
+    servers: servers.value.join("\n"),
     contractsUrl: contractsUrl.value,
   });
   const onFormChange = ({
     target: { name, value },
-  }: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+  }: React.ChangeEvent<
+    HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+  >) => {
     setForm({ name, value });
   };
   const onSave = (event: React.FormEvent) => {
@@ -80,16 +86,37 @@ export default function Settings() {
       setError("Cannot mine to temporary wallet");
       return;
     }
+
+    const serversArray = form.servers
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    // Check if server has changed and reconnect
+    const didChangeServer = serversArray[0] !== servers.value[0];
+
     mineToAddress.value = form.mineToAddress;
     mintMessage.value = form.mintMessage;
     hideMessages.value = form.hideMessages === "1";
     contractsUrl.value = form.contractsUrl;
-    server.value = form.server;
+    servers.value = serversArray;
+
     localStorage.setItem("mineToAddress", form.mineToAddress);
     localStorage.setItem("mintMessage", form.mintMessage);
     localStorage.setItem("hideMessages", form.hideMessages);
-    localStorage.setItem("server", form.server);
+    localStorage.setItem("servers", JSON.stringify(serversArray));
     localStorage.setItem("contractsUrl", form.contractsUrl);
+
+    // Update work
+    if (miningStatus.value === "mining") {
+      miningStatus.value = "change";
+    }
+
+    if (didChangeServer) {
+      console.debug("Server changed, reconnecting");
+      connect(true);
+    }
+
     toast({
       status: "success",
       description: "Saved",
@@ -159,12 +186,16 @@ export default function Settings() {
             </Select>
           </FormControl>
           <FormControl mb={4}>
-            <FormLabel>Server</FormLabel>
-            <Input
-              name="server"
-              defaultValue={form.server}
+            <FormLabel>Servers</FormLabel>
+            <Textarea
+              name="servers"
+              defaultValue={form.servers}
               onChange={onFormChange}
-            />
+              rows={3}
+            ></Textarea>
+            <FormHelperText>
+              List of servers in order of preference
+            </FormHelperText>
           </FormControl>
           <FormControl mb={4}>
             <FormLabel>Contracts URL</FormLabel>

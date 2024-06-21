@@ -11,7 +11,6 @@ import {
 } from "@bitauth/libauth";
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
-import { ElectrumWS } from "ws-electrumx-client";
 import { Script, Transaction } from "@radiantblockchain/radiantjs";
 import type { Contract, Token, Utxo, Work } from "./types";
 import { decodeGlyph } from "./glyph";
@@ -30,61 +29,18 @@ import {
   wallet,
   work,
 } from "./signals";
-import { effect, signal, untracked } from "@preact/signals-react";
+import { effect } from "@preact/signals-react";
 import { addMessage } from "./message";
-import { mintMessageScript } from "./pow";
 import miner from "./miner";
 import { Buffer } from "buffer";
 import { isRef, reverseRef } from "./utils";
+import { client } from "./client";
 
 const FEE_PER_KB = 5000000;
 
 export function scriptHash(bytecode: Uint8Array): string {
   return swapEndianness(bytesToHex(sha256(bytecode)));
 }
-
-export enum ServerStatus {
-  DISCONNECTED,
-  CONNECTING,
-  CONNECTED,
-}
-export const server = signal(
-  localStorage.getItem("server") ||
-    //"wss://electrumx-testnet.radiant4people.com:53002",
-    "wss://electrumx.radiant4people.com:50022"
-);
-export const status = signal(ServerStatus.DISCONNECTED);
-let client: ElectrumWS;
-
-// Reconnect when server is changed
-effect(async () => {
-  console.debug("effect: reconnect");
-  untracked(async () => await miner.stop());
-
-  client = new ElectrumWS(server.value);
-  client.on("connected", () => {
-    status.value = ServerStatus.CONNECTED;
-  });
-  client.on("close", () => {
-    status.value = ServerStatus.DISCONNECTED;
-  });
-
-  status.value = ServerStatus.CONNECTING;
-
-  untracked(() => subscribeToAddress());
-});
-
-// Subscriptions will be created when wallet signal changes
-effect(() => {
-  console.debug("effect: subscribe to address");
-  const address = wallet.value?.address || "";
-  if (!address && client.isConnected()) {
-    client.close("");
-    return;
-  }
-
-  subscribeToAddress();
-});
 
 // Consume nonces signal
 effect(() => {
@@ -261,7 +217,6 @@ async function claimTokens(contract: Contract, work: Work, nonce: string) {
   const tx = new Transaction();
   tx.feePerKb(FEE_PER_KB);
   const p2pkh = Script.fromAddress(wallet.value.address).toHex();
-  const msg = mintMessageScript().toHex();
   const ft = `${Script.fromAddress(mineToAddress.value).toHex()}bdd0${
     contract.tokenRef
   }dec0e9aa76e378e4a269e69d`;
@@ -320,10 +275,12 @@ async function claimTokens(contract: Contract, work: Work, nonce: string) {
       script: ft,
     })
   );
+
+  // Output script is message
   tx.addOutput(
     new Transaction.Output({
       satoshis: 0,
-      script: msg,
+      script: bytesToHex(work.outputScript),
     })
   );
   tx.change(wallet.value.address);
@@ -365,7 +322,7 @@ const updateUnspent = async (sh: string) => {
   }
 };
 
-function subscribeToAddress() {
+export function subscribeToAddress() {
   console.debug("Subscribing to address");
   const address = wallet.value?.address;
   if (!address) {
@@ -505,7 +462,7 @@ export async function fetchDeployments(
   );
 
   const tokens = [];
-  let i = 0;
+  let i = 1;
   for (const singleton of contracts) {
     const txid = singleton.slice(0, 64);
     const vout = parseInt(singleton.slice(65), 16);

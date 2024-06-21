@@ -5,7 +5,6 @@ import {
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
 import { Script } from "@radiantblockchain/radiantjs";
 import { Contract, Work } from "./types";
-import { mintMessage } from "./signals";
 import { sha256 } from "@noble/hashes/sha256";
 import { cat } from "./utils";
 
@@ -28,15 +27,16 @@ export function calcTimeToMine(target: bigint, hashesPerSecond: number) {
   );
 }
 
-export function mintMessageScript() {
+export function mintMessageScript(message: string) {
   const magicBytes = "6d7367"; // msg
-  const msgHex = bytesToHex(new TextEncoder().encode(mintMessage.value));
+  const msgHex = bytesToHex(new TextEncoder().encode(message));
   return Script.fromASM(`OP_RETURN ${magicBytes} ${msgHex}`);
 }
 
 export function createWork(
   contract: Contract,
-  address: string
+  address: string,
+  message: string
 ): Work | undefined {
   const p2pkh = base58AddressToLockingBytecode(address);
   if (typeof p2pkh === "string") {
@@ -45,7 +45,7 @@ export function createWork(
   }
 
   const inputScript = p2pkh.bytecode;
-  const outputScript = new Uint8Array(mintMessageScript().toBuffer());
+  const outputScript = new Uint8Array(mintMessageScript(message).toBuffer());
 
   return {
     txid: hexToBytes(swapEndianness(contract.location)),

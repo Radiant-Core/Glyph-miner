@@ -29,6 +29,12 @@ export const theme = extendTheme({
         focusBorderColor: "lightGreen.A400",
       },
     },
+    Textarea: {
+      defaultProps: {
+        variant: "filled",
+        focusBorderColor: "lightGreen.A400",
+      },
+    },
     Select: {
       defaultProps: {
         variant: "filled",

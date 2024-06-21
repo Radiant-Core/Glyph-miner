@@ -21,10 +21,13 @@ export default defineConfig({
       plugins: [NodeGlobalsPolyfillPlugin({ buffer: false })],
     },
   },
+  define: {
+    APP_VERSION: JSON.stringify(process.env.npm_package_version),
+  },
   parserOptions: {
-    ecmaVersion: 'latest',
-    sourceType: 'module',
-    project: ['./tsconfig.json', './tsconfig.node.json'],
+    ecmaVersion: "latest",
+    sourceType: "module",
+    project: ["./tsconfig.json", "./tsconfig.node.json"],
     tsconfigRootDir: __dirname,
   },
 });

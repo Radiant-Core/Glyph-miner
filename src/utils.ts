@@ -23,3 +23,17 @@ export function reverseRef(hex: string) {
 export function isRef(ref: string) {
   return ref.match(/^[0-9a-f]{64}[0-9a-f]{8}$/);
 }
+
+export function shuffle(array: unknown[]) {
+  let currentIndex = array.length;
+
+  while (currentIndex != 0) {
+    const randomIndex = Math.floor(Math.random() * currentIndex);
+    currentIndex--;
+    [array[currentIndex], array[randomIndex]] = [
+      array[randomIndex],
+      array[currentIndex],
+    ];
+  }
+  return array;
+}

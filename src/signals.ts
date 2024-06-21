@@ -3,6 +3,7 @@ import { Contract, Glyph, Message, Utxo, Wallet } from "./types";
 import { calcTimeToMine, createWork } from "./pow";
 import { addMessage } from "./message";
 
+export const servers = signal<string[]>([]);
 export const messages = signal<Message[]>([]);
 export const hashrate = signal(0);
 export const found = signal(0);
@@ -21,7 +22,7 @@ export const contractsUrl = signal("");
 export const glyph = signal<Glyph | undefined>(undefined);
 export const work = computed(() => {
   if (!contract.value || !wallet.value?.address) return;
-  return createWork(contract.value, wallet.value.address);
+  return createWork(contract.value, wallet.value.address, mintMessage.value);
 });
 export const miningStatus = signal<"stop" | "change" | "mining" | "ready">(
   "ready"

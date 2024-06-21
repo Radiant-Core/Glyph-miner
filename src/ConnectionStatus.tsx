@@ -1,5 +1,5 @@
 import { Box, BoxProps } from "@chakra-ui/react";
-import { ServerStatus, status } from "./blockchain";
+import { ServerStatus, serverStatus } from "./client";
 
 const statusText = {
   [ServerStatus.CONNECTED]: { color: "lightGreen.A200", text: "Connected" },
@@ -8,10 +8,10 @@ const statusText = {
 };
 
 export default function ConnectionStatus(props: BoxProps) {
-  const serverStatus = statusText[status.value];
+  const status = statusText[serverStatus.value];
   return (
     <Box
-      color={serverStatus.color}
+      color={status.color}
       bgColor="blackAlpha.400"
       px={2}
       py={1}
@@ -19,7 +19,7 @@ export default function ConnectionStatus(props: BoxProps) {
       fontSize="medium"
       {...props}
     >
-      {serverStatus.text}
+      {status.text}
     </Box>
   );
 }
