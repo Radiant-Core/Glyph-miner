@@ -8,7 +8,7 @@ import ConnectionStatus from "./ConnectionStatus";
 
 export default function TopBar() {
   return (
-    <Box bg="bg.400" position="fixed" width="100vw" top={0}>
+    <Box bg="bg.400" position="fixed" width="100vw" top={0} zIndex={1}>
       <Container maxW="container.lg" as={Flex} alignItems="center" py={2}>
         <Logo />
         <Box flexGrow={1} />
