@@ -39,6 +39,7 @@ import "../index.css";
 import { addMessage } from "../message";
 import BottomBar from "../BottomBar";
 import { isRef } from "../utils";
+import { ServerStatus, serverStatus } from "../client";
 
 export default function Miner() {
   useSignals();
@@ -90,7 +91,8 @@ export default function Miner() {
     contract.value !== undefined &&
     contract.value.height < contract.value.maxHeight &&
     balance.value > 0 &&
-    mineToAddress.value;
+    mineToAddress.value &&
+    serverStatus.value === ServerStatus.CONNECTED;
 
   return (
     <>
