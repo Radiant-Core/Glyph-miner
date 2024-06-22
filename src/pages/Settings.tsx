@@ -261,9 +261,9 @@ export default function Settings() {
                 >
                   {showMnemonic ? (
                     wallet.value.mnemonic.split(" ").map((word, i) => (
-                      <Code mr={1} key={i}>
-                        {word}
-                      </Code>
+                      <>
+                        <Code key={i}>{word}</Code>{" "}
+                      </>
                     ))
                   ) : (
                     <Button onClick={() => setShowMnemonic(true)}>Show</Button>

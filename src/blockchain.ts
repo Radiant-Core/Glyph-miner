@@ -642,6 +642,18 @@ export class Blockchain {
   }
 
   async changeToken(ref: string) {
+    // Unsubscribe from current subscription
+    if (work.value?.contractRef) {
+      console.debug(
+        `Unsubscribing from current contract ${bytesToHex(
+          work.value?.contractRef
+        )}`
+      );
+      const sh = scriptHash(work.value?.contractRef);
+      // This will cause an error "unsubscribe is unknown method" but seems to work anyway
+      client.unsubscribe("blockchain.scripthash", sh);
+    }
+
     const token = await fetchToken(ref);
     if (!token) {
       addMessage({ type: "not-found", ref });
@@ -661,8 +673,6 @@ export class Blockchain {
     if (balance.value < 0.0001) {
       addMessage({ type: "general", msg: "Balance is low" });
     }
-
-    // TODO unsubscribe from existing subscriptions
 
     // Subscribe to the singleton so we know when the contract moves
     // Change ref to little-endian
