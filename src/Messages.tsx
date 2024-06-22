@@ -1,5 +1,5 @@
 import { PropsWithChildren } from "react";
-import { Flex, Icon, Text } from "@chakra-ui/react";
+import { Box, Flex, Icon, Text } from "@chakra-ui/react";
 import { GoSmiley } from "react-icons/go";
 import { useSignals } from "@preact/signals-react/runtime";
 import { gpu, hideMessages, messages } from "./signals";
@@ -50,7 +50,6 @@ function Line({ children }: PropsWithChildren) {
   return (
     <Flex
       fontFamily="Overpass Mono Variable"
-      alignItems="center"
       gap={4}
       py={1}
       fontSize="medium"
@@ -69,83 +68,85 @@ export default function Messages() {
       {messages.value.map((m) => (
         <Line key={m.id}>
           <div>{m.date}</div>
-          {m.type === "found" && (
-            <div>
-              Found nonce <Id>{m.nonce}</Id>
-            </div>
-          )}
-          {m.type === "accept" && (
-            <div>
-              <Text
-                color="green.300"
-                bgGradient="linear(to-r, lightBlue.A400, lightGreen.A400)"
-                bgClip="text"
-                as="span"
-              >
-                Tokens minted!{" "}
+          <Box wordBreak="break-all">
+            {m.type === "found" && (
+              <>
+                Found nonce <Id>{m.nonce}</Id>
+              </>
+            )}
+            {m.type === "accept" && (
+              <>
+                <Text
+                  color="green.300"
+                  bgGradient="linear(to-r, lightBlue.A400, lightGreen.A400)"
+                  bgClip="text"
+                  as="span"
+                >
+                  Tokens minted!{" "}
+                </Text>
+                <Icon
+                  as={GoSmiley}
+                  verticalAlign="middle"
+                  boxSize={4}
+                  color="lightGreen.A400"
+                />{" "}
+                <Id>
+                  <ShortId id={m.txid} />
+                </Id>
+                <Msg>{m.msg.substring(0, 80)}</Msg>
+              </>
+            )}
+            {m.type === "new-location" && (
+              <>
+                New contract received{" "}
+                <Id>
+                  <ShortId id={m.txid} />
+                </Id>
+                {hideMessages.value || <Msg>{m.msg}</Msg>}
+              </>
+            )}
+            {m.type === "reject" && (
+              <>
+                Nonce rejected <Id>{m.nonce}</Id>
+              </>
+            )}
+            {m.type === "general" && m.msg}
+            {m.type === "minted-out" && (
+              <Text color="red.A200">
+                Token{" "}
+                <Id>
+                  <ShortRef id={m.ref} />
+                </Id>{" "}
+                is minted out!
+                {hideMessages || <Msg>{m.msg}</Msg>}
               </Text>
-              <Icon
-                as={GoSmiley}
-                verticalAlign="middle"
-                boxSize={4}
-                color="lightGreen.A400"
-              />{" "}
-              <Id>
-                <ShortId id={m.txid} />
-              </Id>
-              <Msg>{m.msg.substring(0, 80)}</Msg>
-            </div>
-          )}
-          {m.type === "new-location" && (
-            <div>
-              New contract received{" "}
-              <Id>
-                <ShortId id={m.txid} />
-              </Id>
-              {hideMessages.value || <Msg>{m.msg}</Msg>}
-            </div>
-          )}
-          {m.type === "reject" && (
-            <div>
-              Nonce rejected <Id>{m.nonce}</Id>
-            </div>
-          )}
-          {m.type === "general" && m.msg}
-          {m.type === "minted-out" && (
-            <Text color="red.A200">
-              Token{" "}
-              <Id>
-                <ShortRef id={m.ref} />
-              </Id>{" "}
-              is minted out!
-              {hideMessages || <Msg>{m.msg}</Msg>}
-            </Text>
-          )}
-          {m.type === "not-found" && (
-            <Text color="red.A200">
-              No dmint contract found for{" "}
-              <Id>
-                <ShortRef id={m.ref} />
-              </Id>
-            </Text>
-          )}
-          {m.type === "loaded" && (
-            <div>
-              Contract{" "}
-              <Id>
-                <ShortRef id={m.ref} />
-              </Id>{" "}
-              loaded
-            </div>
-          )}
-          {m.type === "mint-time" && (
-            <div>
-              Estimated mint time on your {gpu.value || "GPU"} is{" "}
-              {formatDuration(m.seconds)}
-            </div>
-          )}
-          {m.type === "start" && <div>Mining started</div>}
-          {m.type === "stop" && <div>Mining stopped</div>}
+            )}
+            {m.type === "not-found" && (
+              <Text color="red.A200">
+                No dmint contract found for{" "}
+                <Id>
+                  <ShortRef id={m.ref} />
+                </Id>
+              </Text>
+            )}
+            {m.type === "loaded" && (
+              <>
+                Contract{" "}
+                <Id>
+                  <ShortRef id={m.ref} />
+                </Id>{" "}
+                loaded
+              </>
+            )}
+            {m.type === "mint-time" && (
+              <>
+                Estimated mint time on your {gpu.value || "GPU"} is{" "}
+                {formatDuration(m.seconds)}
+              </>
+            )}
+            {m.type === "start" && <>Mining started</>}
+            {m.type === "stop" && <>Mining stopped</>}
+          </Box>
         </Line>
       ))}
       <>
