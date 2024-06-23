@@ -202,6 +202,10 @@ async function fetchToken(contractRef: string) {
   return { glyph, contract: currentParams };
 }
 
+let subscriptionStatus = "";
+let subscriptionCheckTimer: ReturnType<typeof setTimeout>;
+let lastMintSubscriptionStatus = "";
+
 async function claimTokens(contract: Contract, work: Work, nonce: string) {
   if (!wallet.value) return false;
 
@@ -292,6 +296,8 @@ async function claimTokens(contract: Contract, work: Work, nonce: string) {
     const txid = (await broadcast(hex)) as string;
 
     // Update UTXOs so if there's a mint before subscription updates it can be funded
+    // Set a timer that will refresh wallet in case tx was replaced and no subscription received
+    startSubscriptionCheckTimer();
     const changeOutputIndex = tx.outputs.length - 1;
     utxos.value = [
       {
@@ -307,18 +313,50 @@ async function claimTokens(contract: Contract, work: Work, nonce: string) {
     return txid;
   } catch (error) {
     console.debug("Broadcast failed", error);
+
+    // This should be caught by subscription and subscriptionCheckTimer, but handle here in case
+    if ((error as Error).message.includes("Missing inputs")) {
+      console.debug("Missing inputs, updating unspent");
+      // Stop miner and wait for UTXOs to update
+      clearTimeout(subscriptionCheckTimer);
+      miner.stop();
+      await updateUnspent();
+      miner.start();
+    }
+
     return false;
   }
 }
 
-const updateUnspent = async (sh: string) => {
-  const response = (await client.request(
-    "blockchain.scripthash.listunspent",
-    sh
-  )) as Utxo[];
-  if (response) {
-    balance.value = response.reduce((a, { value }) => a + value, 0);
-    utxos.value = response;
+// Sometimes a tx might not get mined and no subscription status is received
+// Set a timer to check if subscription changed after mint
+function startSubscriptionCheckTimer() {
+  lastMintSubscriptionStatus = subscriptionStatus;
+  clearTimeout(subscriptionCheckTimer);
+  subscriptionCheckTimer = setTimeout(() => {
+    if (lastMintSubscriptionStatus === subscriptionStatus && wallet.value) {
+      console.debug("No subscription received. Updating unspent.");
+      updateUnspent();
+    }
+  }, 10000);
+}
+
+const updateUnspent = async () => {
+  if (wallet.value) {
+    const p2pkh = base58AddressToLockingBytecode(wallet.value?.address);
+    if (typeof p2pkh !== "string") {
+      const sh = scriptHash(p2pkh.bytecode);
+
+      console.debug("updateUnspent", sh);
+      const response = (await client.request(
+        "blockchain.scripthash.listunspent",
+        sh
+      )) as Utxo[];
+      if (response) {
+        balance.value = response.reduce((a, { value }) => a + value, 0);
+        utxos.value = response;
+      }
+    }
   }
 };
 
@@ -334,13 +372,12 @@ export function subscribeToAddress() {
     console.debug(`Address set to ${address}`);
 
     const sh = scriptHash(p2pkh.bytecode);
-    let subscriptionStatus = "";
     client.subscribe(
       "blockchain.scripthash",
       (_, newStatus: unknown) => {
         if (newStatus !== subscriptionStatus) {
           console.debug(`Status received ${newStatus}`);
-          updateUnspent(sh);
+          updateUnspent();
           subscriptionStatus = newStatus as string;
         }
       },
