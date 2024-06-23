@@ -1,7 +1,7 @@
 {
   "name": "glyph-miner",
   "private": true,
-  "version": "1.0.3",
+  "version": "1.0.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -17,7 +17,7 @@
     "@emotion/styled": "^11.11.5",
     "@esbuild-plugins/node-globals-polyfill": "^0.2.3",
     "@fontsource-variable/inter": "^5.0.18",
-    "@fontsource-variable/overpass-mono": "^5.0.18",
+    "@fontsource-variable/source-code-pro": "^5.0.19",
     "@fontsource/days-one": "^5.0.19",
     "@noble/hashes": "^1.4.0",
     "@preact/signals-react": "^2.0.1",

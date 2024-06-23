@@ -17,9 +17,10 @@ import {
   Thead,
   Tr,
 } from "@chakra-ui/react";
-import { Contract, Glyph, Token } from "../types";
+import { ContractGroup } from "../types";
 import { MAX_TARGET } from "../pow";
 import { FaQuestionCircle } from "react-icons/fa";
+import { MdExpand } from "react-icons/md";
 import { TokenImage } from "../TokenDetails";
 import { CloseIcon } from "@chakra-ui/icons";
 import { LuRefreshCw } from "react-icons/lu";
@@ -29,12 +30,10 @@ import { reverseRef } from "../utils";
 import { selectedContract } from "../signals";
 import ShortRef from "../ShortRef";
 
-function TokenRow({
-  token: { glyph, contract },
-}: {
-  token: { glyph: Glyph; contract: Contract };
-}) {
-  const { target, height, maxHeight, reward } = contract;
+function TokenRow({ token }: { token: ContractGroup }) {
+  const { target, reward, contractRef } = token.contracts[0];
+  const { mintedSupply, numContracts, totalSupply } = token.summary;
+  const { glyph } = token;
   const navigate = useNavigate();
 
   const file = glyph.files.main;
@@ -42,8 +41,13 @@ function TokenRow({
   const hasImage = type?.startsWith("image/") && file?.b instanceof Uint8Array;
   const difficulty = MAX_TARGET / target;
   const ticker = (glyph.payload.ticker as string) || "???";
-  const ref = reverseRef(contract.contractRef);
   const load = () => {
+    // Select a random contract with unminted tokens
+    const unminted = token.contracts.filter((c) => c.height < c.maxHeight);
+    const ref = reverseRef(
+      unminted[Math.floor(Math.random() * unminted.length)].contractRef
+    );
+
     selectedContract.value = ref;
     blockchain.changeToken(ref);
     navigate("/");
@@ -62,14 +66,22 @@ function TokenRow({
         </Flex>
       </Td>
       <Td>
-        <ShortRef id={ref} />
+        <ShortRef id={contractRef} omitVout />
       </Td>
       <Td isNumeric>
-        {`${((Number(height) / Number(maxHeight)) * 100).toFixed(2)}`}%
+        {((Number(mintedSupply) / Number(totalSupply)) * 100).toFixed(2)}%
       </Td>
+      <Td isNumeric>{numContracts}</Td>
       <Td isNumeric>{`${reward}`}</Td>
       <Td isNumeric>{`${difficulty}`}</Td>
       <Td isNumeric>
+        <IconButton
+          as={Link}
+          to={`/contracts/${reverseRef(contractRef)}`}
+          icon={<Icon as={MdExpand} />}
+          aria-label="View contracts"
+          mr={2}
+        />
         <Button onClick={load}>Load</Button>
       </Td>
     </Tr>
@@ -77,7 +89,7 @@ function TokenRow({
 }
 
 export default function TokenList() {
-  const [tokens, setTokens] = useState<Token[] | null>(null);
+  const [tokens, setTokens] = useState<ContractGroup[] | null>(null);
   const { page: pageParam } = useParams();
   const [pages, setPages] = useState(0);
   const page = pageParam ? parseInt(pageParam, 10) : 0;
@@ -89,7 +101,7 @@ export default function TokenList() {
       const results = await fetchDeployments((n) => {
         setProgress(n);
       }, page);
-      setTokens(results.tokens);
+      setTokens(results.contractGroups);
       setPages(results.pages);
       setProgress(0);
     })();
@@ -106,7 +118,7 @@ export default function TokenList() {
       0,
       true
     );
-    setTokens(results.tokens);
+    setTokens(results.contractGroups);
     setPages(results.pages);
     setProgress(0);
   };
@@ -158,6 +170,7 @@ export default function TokenList() {
                 <Th>Name</Th>
                 <Th>ID</Th>
                 <Th isNumeric>Claimed</Th>
+                <Th isNumeric>Contracts</Th>
                 <Th isNumeric>Reward</Th>
                 <Th isNumeric>Difficulty</Th>
                 <Th></Th>
@@ -166,7 +179,10 @@ export default function TokenList() {
             <Tbody>
               {tokens &&
                 tokens.map((token) => (
-                  <TokenRow key={token.contract.contractRef} token={token} />
+                  <TokenRow
+                    key={token.contracts[0].contractRef}
+                    token={token}
+                  />
                 ))}
             </Tbody>
           </Table>

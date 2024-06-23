@@ -20,7 +20,7 @@ export const theme = extendTheme({
   fonts: {
     heading: `'Inter Variable', sans-serif`,
     body: `'Inter Variable', sans-serif`,
-    mono: `'Overpass Mono Variable', monospace`,
+    ono: `'Source Code Pro Variable', monospace`,
   },
   components: {
     Input: {

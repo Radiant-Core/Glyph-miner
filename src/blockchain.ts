@@ -12,7 +12,6 @@ import {
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
 import { Script, Transaction } from "@radiantblockchain/radiantjs";
-import type { Contract, Token, Utxo, Work } from "./types";
 import { decodeGlyph } from "./glyph";
 import {
   accepted,
@@ -33,8 +32,9 @@ import { effect } from "@preact/signals-react";
 import { addMessage } from "./message";
 import miner from "./miner";
 import { Buffer } from "buffer";
-import { isRef, reverseRef } from "./utils";
+import { arrayChunks, isRef, reverseRef } from "./utils";
 import { client } from "./client";
+import { ContractGroup, Contract, Work, Utxo, Token } from "./types";
 
 const FEE_PER_KB = 5000000;
 
@@ -410,13 +410,13 @@ export async function sweepWallet() {
 }
 
 // Temporary replacement for fetchContractUtxos
-async function fetchCuratedContracts() {
+async function fetchCuratedContracts(): Promise<[string, number][]> {
   try {
     const response = await fetch(contractsUrl.value);
     if (!response.ok) {
       return [];
     }
-    return (await response.json()) as string[];
+    return (await response.json()) as [string, number][];
   } catch {
     return [];
   }
@@ -468,12 +468,12 @@ async function fetchRef(ref: string) {
   return [];
 }
 
-const RESULTS_PER_PAGE = 16;
+const RESULTS_PER_PAGE = 10;
 export async function fetchDeployments(
   onProgress: (n: number) => undefined = () => undefined,
   page = 0,
   refresh = false
-): Promise<{ tokens: Token[]; pages: number }> {
+): Promise<{ contractGroups: ContractGroup[]; pages: number }> {
   if (refresh) {
     await localforage.clear();
   }
@@ -485,42 +485,113 @@ export async function fetchDeployments(
     const contractAddresses = await localforage.getItem<string[]>(allKey);
     if (contractAddresses?.length) {
       const pages = Math.ceil(contractAddresses.length / RESULTS_PER_PAGE);
-      return { tokens: pageCache as Token[], pages };
+
+      // Get each cached group
+      const firstRefs = pageCache as string[];
+      const contractGroups = (
+        await Promise.all(
+          firstRefs.map((firstRef) =>
+            localforage.getItem<ContractGroup>(`contractGroup.${firstRef}`)
+          )
+        )
+      ).filter(Boolean) as ContractGroup[];
+
+      return { contractGroups, pages };
     }
   }
 
   // TODO implement pagination in ElectrumX
   const all =
-    (await localforage.getItem<string[]>(allKey)) ||
+    (await localforage.getItem<[string, number][]>(allKey)) ||
     (await fetchCuratedContracts());
-  const contracts = all.slice(
+  const contractAddresses = all.slice(
     page * RESULTS_PER_PAGE,
     (page + 1) * RESULTS_PER_PAGE
   );
 
-  const tokens = [];
-  let i = 1;
-  for (const singleton of contracts) {
+  const expanded = contractAddresses.flatMap(([singleton, numContracts]) => {
     const txid = singleton.slice(0, 64);
     const vout = parseInt(singleton.slice(65), 16);
 
-    // Convert short format to big endian hex
-    const buf = Buffer.alloc(36);
-    buf.write(txid, 0, 32, "hex");
-    buf.writeUInt32BE(vout, 32);
-    const ref = buf.toString("hex");
-    const cachedToken = await localforage.getItem<Token>(ref);
-    const token = cachedToken || (await fetchToken(ref));
-    if (token) {
-      tokens.push(token);
-      localforage.setItem(ref, token);
-    }
-    onProgress((++i / contracts.length) * 100);
+    return new Array(numContracts).fill(undefined).map((_, i) => {
+      // Add to vout and convert short format to big endian hex
+      const buf = Buffer.alloc(36);
+      buf.write(txid, 0, 32, "hex");
+      buf.writeUInt32BE(vout + i, 32);
+      // Save firstVout so we can group by first ref later
+      return { firstVout: vout, singleton: buf.toString("hex") };
+    });
+  });
+
+  const batches = arrayChunks(expanded, 4);
+  const contracts: { firstVout: number; token: Token }[] = [];
+  let progress = 1;
+
+  // Fetch in batches
+  for (const batch of batches) {
+    contracts.push(
+      ...((
+        await Promise.all(
+          batch.map(async ({ firstVout, singleton }) => {
+            const cachedToken = await localforage.getItem<Token>(singleton);
+            const token = cachedToken || (await fetchToken(singleton));
+            onProgress((++progress / expanded.length) * 100);
+            if (token) {
+              localforage.setItem(singleton, token);
+              return { firstVout, token };
+            }
+            return undefined;
+          })
+        )
+      ).filter(Boolean) as { firstVout: number; token: Token }[])
+    );
   }
 
-  localforage.setItem(cacheKey, tokens);
+  // Build contract groups
+  const contractGroups = new Map<string, ContractGroup>();
+  contracts.forEach(({ firstVout, token: contract }) => {
+    const txid = contract.contract.contractRef.substring(0, 64);
+    // Group by the first ref
+    const buf = Buffer.alloc(36);
+    buf.write(swapEndianness(txid), 0, 32, "hex");
+    buf.writeUInt32BE(firstVout, 32);
+    const firstRef = buf.toString("hex");
+
+    if (!contractGroups.has(firstRef)) {
+      contractGroups.set(firstRef, {
+        glyph: contract.glyph,
+        summary: {
+          numContracts: 0,
+          totalSupply: 0n,
+          mintedSupply: 0n,
+        },
+        contracts: [],
+      });
+    }
+    const token = contractGroups.get(firstRef);
+    if (token) {
+      token.contracts.push(contract.contract);
+      token.summary.numContracts++;
+      token.summary.totalSupply +=
+        contract.contract.maxHeight * contract.contract.reward;
+      token.summary.mintedSupply +=
+        contract.contract.height * contract.contract.reward;
+    }
+  });
+
+  // Cache page refs and contract groups
+  for (const [firstRef, g] of contractGroups) {
+    localforage.setItem(`contractGroup.${firstRef}`, g);
+  }
+  const firstRefs = [...contractGroups.keys()];
+  localforage.setItem(cacheKey, firstRefs);
+
   const pages = Math.ceil(all.length / RESULTS_PER_PAGE);
-  return { tokens, pages };
+  return { contractGroups: [...contractGroups.values()], pages };
+}
+
+export async function getCachedTokenContracts(firstRef: string) {
+  return await localforage.getItem<ContractGroup>(`contractGroup.${firstRef}`);
 }
 
 function parseDmintScript(script: string): string {
