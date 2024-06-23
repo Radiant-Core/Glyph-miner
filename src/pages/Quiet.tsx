@@ -14,7 +14,7 @@ export default function Quiet() {
       justifyContent="center"
       w="100vw"
       h="100vh"
-      fontFamily="Overpass Mono Variable, sans-serif"
+      fontFamily="Source Code Pro Variable, sans-serif"
       userSelect="none"
       cursor="pointer"
     >

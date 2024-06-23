@@ -17,7 +17,7 @@ function formatDuration(seconds: number) {
 function Id({ children }: PropsWithChildren) {
   return (
     <Text
-      fontFamily="Overpass Mono Variable"
+      fontFamily="Source Code Pro Variable"
       color="chakra-body-text"
       bgColor="blackAlpha.400"
       as="span"
@@ -49,7 +49,7 @@ function Msg({ children }: PropsWithChildren) {
 function Line({ children }: PropsWithChildren) {
   return (
     <Flex
-      fontFamily="Overpass Mono Variable"
+      fontFamily="Source Code Pro Variable"
       gap={4}
       py={1}
       fontSize="medium"

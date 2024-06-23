@@ -8,6 +8,7 @@ import License from "./pages/License.tsx";
 import Settings from "./pages/Settings.tsx";
 import TokenList from "./pages/TokenList.tsx";
 import Quiet from "./pages/Quiet.tsx";
+import ContractList from "./pages/ContractList.tsx";
 
 const router = createHashRouter([
   {
@@ -21,6 +22,10 @@ const router = createHashRouter([
       {
         path: "/tokens/:page?",
         element: <TokenList />,
+      },
+      {
+        path: "/contracts/:firstRef",
+        element: <ContractList />,
       },
       {
         path: "/license",

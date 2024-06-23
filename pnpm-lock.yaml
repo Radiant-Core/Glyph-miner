@@ -34,9 +34,9 @@ dependencies:
   '@fontsource-variable/inter':
     specifier: ^5.0.18
     version: 5.0.18
-  '@fontsource-variable/overpass-mono':
-    specifier: ^5.0.18
-    version: 5.0.18
+  '@fontsource-variable/source-code-pro':
+    specifier: ^5.0.19
+    version: 5.0.19
   '@fontsource/days-one':
     specifier: ^5.0.19
     version: 5.0.19
@@ -1853,8 +1853,8 @@ packages:
     resolution: {integrity: sha512-rJzSrtJ3b7djiGFvRuTe6stDfbYJGhdQSfn2SI2WfXviee7Er0yKAHE5u7FU7OWVQQQ1x3+cxdmx9NdiAkcrcA==}
     dev: false
 
-  /@fontsource-variable/overpass-mono@5.0.18:
-    resolution: {integrity: sha512-dC3Drr734VlvIzReiC/G8Szxe0X9FxhSEAlTuPBd4u0h0mgSf7+4ViSmY5ehgC7uKGjClCQMcyHDh2prERoDOQ==}
+  /@fontsource-variable/source-code-pro@5.0.19:
+    resolution: {integrity: sha512-mmeEykZsLRuFsklfamKVwahnWNpdAzpvGcOPPiFUydSnrd/9aEXy/HzOSYCOOTCP667L4nio9rB7wO3KVO5J/w==}
     dev: false
 
   /@fontsource/days-one@5.0.19:

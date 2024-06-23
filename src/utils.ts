@@ -37,3 +37,14 @@ export function shuffle(array: unknown[]) {
   }
   return array;
 }
+
+export function arrayChunks<T = unknown>(arr: T[], chunkSize: number) {
+  const chunks = [];
+
+  for (let i = 0; i < arr.length; i += chunkSize) {
+    const chunk = arr.slice(i, i + chunkSize);
+    chunks.push(chunk);
+  }
+
+  return chunks;
+}
