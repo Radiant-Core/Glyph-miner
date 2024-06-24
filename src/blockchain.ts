@@ -436,7 +436,7 @@ export async function sweepWallet(): Promise<
   const hex = tx.toString();
   try {
     const txid = await broadcast(hex);
-    return { success: true, txid };
+    return { success: true, txid: txid as string };
   } catch (error) {
     const msg = (error as Error).message || "";
     return { success: false, reason: msg };
