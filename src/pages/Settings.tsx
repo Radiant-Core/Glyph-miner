@@ -44,12 +44,24 @@ export default function Settings() {
   const { onCopy, hasCopied } = useClipboard(wallet.value?.address || "");
   const toast = useToast();
   const onClickSweep = async () => {
-    await sweepWallet();
-    toast({
-      status: "success",
-      description: `All coins sent to ${mineToAddress.value}`,
-      variant: "subtle",
-    });
+    const result = await sweepWallet();
+    if (result.success) {
+      toast({
+        status: "success",
+        description: `All coins sent to ${mineToAddress.value} (txid: ${result.txid})`,
+        variant: "subtle",
+        duration: 10000,
+        isClosable: true,
+      });
+    } else {
+      toast({
+        status: "error",
+        description: `Broadcast failed${
+          result.reason ? ` (${result.reason})` : ""
+        }`,
+        variant: "subtle",
+      });
+    }
   };
 
   const [error, setError] = useState("");

@@ -79,6 +79,7 @@ export type Message = {
   | {
       type: "reject";
       nonce: string;
+      reason?: string;
     }
   | {
       type: "general";

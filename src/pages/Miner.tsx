@@ -87,10 +87,11 @@ export default function Miner() {
   };
 
   const gpuSupported = navigator.gpu && gpu.value !== undefined;
+  const reward = Number(contract.value?.reward || 0) / 100000000;
   const canStart =
     contract.value !== undefined &&
     contract.value.height < contract.value.maxHeight &&
-    balance.value > 0 &&
+    balance.value > 0.01 + reward &&
     mineToAddress.value &&
     serverStatus.value === ServerStatus.CONNECTED;
 

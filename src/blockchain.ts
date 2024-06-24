@@ -36,7 +36,7 @@ import { arrayChunks, isRef, reverseRef } from "./utils";
 import { client } from "./client";
 import { ContractGroup, Contract, Work, Utxo, Token } from "./types";
 
-const FEE_PER_KB = 5000000;
+const FEE_PER_KB = 2000000;
 
 export function scriptHash(bytecode: Uint8Array): string {
   return swapEndianness(bytesToHex(sha256(bytecode)));
@@ -206,8 +206,14 @@ let subscriptionStatus = "";
 let subscriptionCheckTimer: ReturnType<typeof setTimeout>;
 let lastMintSubscriptionStatus = "";
 
-async function claimTokens(contract: Contract, work: Work, nonce: string) {
-  if (!wallet.value) return false;
+async function claimTokens(
+  contract: Contract,
+  work: Work,
+  nonce: string
+): Promise<
+  { success: true; txid: string } | { success: false; reason: string }
+> {
+  if (!wallet.value) return { success: false, reason: "" };
 
   const newHeight = contract.height + 1n;
   const lastMint = newHeight === contract.maxHeight;
@@ -294,6 +300,7 @@ async function claimTokens(contract: Contract, work: Work, nonce: string) {
   try {
     console.debug("Broadcasting", hex);
     const txid = (await broadcast(hex)) as string;
+    console.debug(`txid ${txid}`);
 
     // Update UTXOs so if there's a mint before subscription updates it can be funded
     // Set a timer that will refresh wallet in case tx was replaced and no subscription received
@@ -310,21 +317,39 @@ async function claimTokens(contract: Contract, work: Work, nonce: string) {
     // Also update balance so low balance message can be shown if needed
     balance.value = utxos.value.reduce((a, { value }) => a + value, 0);
 
-    return txid;
+    return { success: true, txid };
   } catch (error) {
     console.debug("Broadcast failed", error);
 
-    // This should be caught by subscription and subscriptionCheckTimer, but handle here in case
-    if ((error as Error).message.includes("Missing inputs")) {
+    const msg = ((error as Error).message || "").toLowerCase();
+
+    const isMissingInputs = msg.includes("missing inputs");
+    const isFeeNotMet =
+      msg.includes("min relay fee not met") ||
+      msg.includes("bad-txns-in-belowout");
+    const isConflict = msg.includes("txn-mempool-conflict");
+
+    let reason = "";
+
+    if (isMissingInputs) {
+      // This should be caught by subscription and subscriptionCheckTimer, but handle here in case
+      reason = "missing inputs";
       console.debug("Missing inputs, updating unspent");
       // Stop miner and wait for UTXOs to update
       clearTimeout(subscriptionCheckTimer);
       miner.stop();
       await updateUnspent();
       miner.start();
+    } else if (isFeeNotMet) {
+      // Stop mining if fees can't be paid
+      reason = "fee not met";
+      miner.stop();
+      addMessage({ type: "stop" });
+    } else if (isConflict) {
+      reason = "mempool conflict";
     }
 
-    return false;
+    return { success: false, reason };
   }
 }
 
@@ -386,8 +411,11 @@ export function subscribeToAddress() {
   }
 }
 
-export async function sweepWallet() {
-  if (!wallet.value || !mineToAddress.value) return;
+export async function sweepWallet(): Promise<
+  { success: true; txid: string } | { success: false; reason: string }
+> {
+  if (!wallet.value || !mineToAddress.value)
+    return { success: false, reason: "" };
   console.debug(`Sweeping ${wallet.value.address} to ${mineToAddress.value}`);
 
   const tx = new Transaction();
@@ -406,7 +434,13 @@ export async function sweepWallet() {
   tx.change(mineToAddress.value);
   tx.sign(privKey);
   const hex = tx.toString();
-  await broadcast(hex);
+  try {
+    const txid = await broadcast(hex);
+    return { success: true, txid };
+  } catch (error) {
+    const msg = (error as Error).message || "";
+    return { success: false, reason: msg };
+  }
 }
 
 // Temporary replacement for fetchContractUtxos
@@ -700,8 +734,9 @@ export class Blockchain {
 
     this.ready = false;
 
-    const txid = await claimTokens(contract.value, work.value, nonce);
-    if (txid) {
+    const result = await claimTokens(contract.value, work.value, nonce);
+    if (result.success) {
+      const { txid } = result;
       accepted.value++;
       this.nonces = [];
       this.ready = true;
@@ -728,7 +763,7 @@ export class Blockchain {
         miningStatus.value = "change";
       }
 
-      if (balance.value < 0.0001) {
+      if (balance.value < 0.0001 + Number(contract.value.reward) / 100000000) {
         addMessage({ type: "general", msg: "Balance is low" });
         miner.stop();
         addMessage({ type: "stop" });
@@ -737,6 +772,7 @@ export class Blockchain {
       addMessage({
         type: "reject",
         nonce,
+        reason: result.reason,
       });
 
       rejected.value++;
@@ -778,8 +814,11 @@ export class Blockchain {
 
     addMessage({ type: "loaded", ref, msg: token.contract.message });
 
-    if (balance.value < 0.0001) {
-      addMessage({ type: "general", msg: "Balance is low" });
+    if (balance.value < 0.01) {
+      addMessage({
+        type: "general",
+        msg: "Balance is low. Please fund wallet to start mining.",
+      });
     }
 
     // Subscribe to the singleton so we know when the contract moves
