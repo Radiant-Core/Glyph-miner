@@ -108,6 +108,7 @@ export default function Messages() {
             {m.type === "reject" && (
               <>
                 Nonce rejected <Id>{m.nonce}</Id>
+                {m.reason && <>({m.reason})</>}
               </>
             )}
             {m.type === "general" && m.msg}
