@@ -48,7 +48,7 @@ export default function Miner() {
   const { start, stop } = miner;
   const refInput = useRef<HTMLInputElement>(null);
 
-  const changeToken = async (event: React.FormEvent) => {
+  const changeToken = (event: React.FormEvent) => {
     event.preventDefault();
     const ref = (refInput.current?.value as string) || "";
     if (!isRef(ref)) {
@@ -60,8 +60,11 @@ export default function Miner() {
       return;
     }
     console.debug("Changing token");
+    if (miningStatus.value !== "ready") {
+      addMessage({ type: "stop" });
+    }
     stop();
-    await blockchain.changeToken(ref);
+    blockchain.changeToken(ref);
   };
 
   const startMining = () => {
@@ -159,7 +162,7 @@ export default function Miner() {
                 icon={
                   <Icon
                     as={FaPlay}
-                    color={canStart ? "lightGreen.A400" : undefined}
+                    color={canStart ? "lightGreen.A200" : undefined}
                   />
                 }
                 aria-label="Start mining"

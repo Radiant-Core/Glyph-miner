@@ -19,6 +19,7 @@ import {
   contract,
   contractsUrl,
   glyph,
+  loadingContract,
   mineToAddress,
   miningStatus,
   mintMessage,
@@ -30,7 +31,7 @@ import {
 } from "./signals";
 import { effect } from "@preact/signals-react";
 import { addMessage } from "./message";
-import miner from "./miner";
+import miner, { updateWork } from "./miner";
 import { Buffer } from "buffer";
 import { arrayChunks, isRef, reverseRef } from "./utils";
 import { client } from "./client";
@@ -328,6 +329,7 @@ async function claimTokens(
       msg.includes("min relay fee not met") ||
       msg.includes("bad-txns-in-belowout");
     const isConflict = msg.includes("txn-mempool-conflict");
+    const isContractFail = msg.includes("mandatory-script-verify-flag-failed");
 
     let reason = "";
 
@@ -338,8 +340,9 @@ async function claimTokens(
       // Stop miner and wait for UTXOs to update
       clearTimeout(subscriptionCheckTimer);
       miner.stop();
-      await updateUnspent();
-      miner.start();
+      updateUnspent().then(() => {
+        miner.start();
+      });
     } else if (isFeeNotMet) {
       // Stop mining if fees can't be paid
       reason = "fee not met";
@@ -347,6 +350,14 @@ async function claimTokens(
       addMessage({ type: "stop" });
     } else if (isConflict) {
       reason = "mempool conflict";
+    } else if (isContractFail) {
+      // If this happens then either UTXOs or work need updating
+      reason = "contract execution failed";
+      miner.stop();
+      await updateUnspent().then(() => {
+        miner.start();
+        miningStatus.value = "change";
+      });
     }
 
     return { success: false, reason };
@@ -720,10 +731,6 @@ export class Blockchain {
     }
   }
 
-  newWork() {
-    this.nonces = [];
-  }
-
   async submit() {
     console.debug("Submitting");
     const nonce = this.nonces.pop();
@@ -786,6 +793,7 @@ export class Blockchain {
   }
 
   async changeToken(ref: string) {
+    loadingContract.value = true;
     // Unsubscribe from current subscription
     if (work.value?.contractRef) {
       console.debug(
@@ -799,6 +807,8 @@ export class Blockchain {
     }
 
     const token = await fetchToken(ref);
+    loadingContract.value = false;
+
     if (!token) {
       addMessage({ type: "not-found", ref });
       return;
@@ -806,6 +816,7 @@ export class Blockchain {
 
     contract.value = token.contract;
     glyph.value = token.glyph;
+    updateWork();
 
     if (token.contract.height === token.contract.maxHeight) {
       addMessage({ type: "minted-out", ref, msg: token.contract.message });
@@ -819,6 +830,10 @@ export class Blockchain {
         type: "general",
         msg: "Balance is low. Please fund wallet to start mining.",
       });
+    }
+
+    if (miningStatus.value === "mining") {
+      miningStatus.value = "change";
     }
 
     // Subscribe to the singleton so we know when the contract moves

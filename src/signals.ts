@@ -1,6 +1,6 @@
-import { computed, effect, signal } from "@preact/signals-react";
-import { Contract, Glyph, Message, Utxo, Wallet } from "./types";
-import { calcTimeToMine, createWork } from "./pow";
+import { effect, signal } from "@preact/signals-react";
+import { Contract, Glyph, Message, Utxo, Wallet, Work } from "./types";
+import { calcTimeToMine } from "./pow";
 import { addMessage } from "./message";
 
 export const servers = signal<string[]>([]);
@@ -20,14 +20,12 @@ export const selectedContract = signal("");
 export const contract = signal<Contract | undefined>(undefined);
 export const contractsUrl = signal("");
 export const glyph = signal<Glyph | undefined>(undefined);
-export const work = computed(() => {
-  if (!contract.value || !wallet.value?.address) return;
-  return createWork(contract.value, wallet.value.address, mintMessage.value);
-});
+export const work = signal<Work | undefined>(undefined);
 export const miningStatus = signal<"stop" | "change" | "mining" | "ready">(
   "ready"
 );
 export const nonces = signal<string[]>([]);
+export const loadingContract = signal(false);
 
 let timer = 0;
 let done = false;

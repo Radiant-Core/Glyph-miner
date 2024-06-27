@@ -1,7 +1,9 @@
-import { Box, Flex, Icon, Image, Text } from "@chakra-ui/react";
+import { Box, Flex, Icon, Image, Spinner, Text } from "@chakra-ui/react";
 import { FaQuestionCircle } from "react-icons/fa";
 import { MAX_TARGET } from "./pow";
-import { glyph, contract } from "./signals";
+import { glyph, contract, loadingContract } from "./signals";
+import { PropsWithChildren } from "react";
+import { useSignals } from "@preact/signals-react/runtime";
 
 export function TokenImage({ type, file }: { type: string; file: Uint8Array }) {
   return (
@@ -16,21 +18,39 @@ export function TokenImage({ type, file }: { type: string; file: Uint8Array }) {
   );
 }
 
+function TextRow({ children }: PropsWithChildren) {
+  return (
+    <Flex
+      bg="bg.100"
+      mt={2}
+      p={4}
+      alignItems="center"
+      justifyContent="center"
+      minHeight="56px"
+      textAlign="center"
+    >
+      {children}
+    </Flex>
+  );
+}
+
 export default function TokenDetails() {
+  useSignals();
+  if (loadingContract.value) {
+    return (
+      <TextRow>
+        <Spinner mr={2} color="lightGreen.A200" />
+        Loading
+      </TextRow>
+    );
+  }
+
   if (!glyph.value || !contract.value) {
     return (
-      <Flex
-        bg="bg.100"
-        mt={2}
-        p={4}
-        alignItems="center"
-        justifyContent="center"
-        minHeight="56px"
-        textAlign="center"
-      >
+      <TextRow>
         No mining contract loaded. Enter a contract address or select a contract
         from the list.
-      </Flex>
+      </TextRow>
     );
   }
 
