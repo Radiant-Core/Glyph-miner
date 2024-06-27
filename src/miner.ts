@@ -5,14 +5,17 @@ import shader from "./pow.wgsl?raw";
 import { swapEndianness } from "@bitauth/libauth";
 import { Work } from "./types";
 import {
+  contract,
   found,
   hashrate,
   miningStatus,
+  mintMessage,
   nonces,
+  wallet,
   work as workSignal,
 } from "./signals";
 import { addMessage } from "./message";
-import { powPreimage } from "./pow";
+import { createWork, powPreimage } from "./pow";
 
 function signedToHex(number: number) {
   let value = Math.max(-2147483648, Math.min(2147483647, number));
@@ -20,6 +23,18 @@ function signedToHex(number: number) {
     value += 4294967296;
   }
   return value.toString(16).padStart(8, "0");
+}
+
+export function updateWork() {
+  if (!contract.value || !wallet.value?.address) {
+    workSignal.value = undefined;
+    return;
+  }
+  workSignal.value = createWork(
+    contract.value,
+    wallet.value.address,
+    mintMessage.value
+  );
 }
 
 // Use js-sha256 to get the midstate after hashing the first 512 bit block
@@ -240,6 +255,7 @@ const start = async () => {
 
     // @ts-expect-error doesn't matter
     if (miningStatus.value === "change") {
+      updateWork();
       console.debug("Changing work");
       if (!workSignal.value) {
         console.debug("Invalid work");

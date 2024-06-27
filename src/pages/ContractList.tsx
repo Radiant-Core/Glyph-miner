@@ -25,9 +25,11 @@ import {
 import { LuRefreshCw } from "react-icons/lu";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ContractGroup, Contract } from "../types";
-import { selectedContract } from "../signals";
+import { miningStatus, selectedContract } from "../signals";
 import ShortId from "../ShortId";
 import { reverseRef } from "../utils";
+import miner from "../miner";
+import { addMessage } from "../message";
 
 function ContractRow({ num, contract }: { num: number; contract: Contract }) {
   const navigate = useNavigate();
@@ -37,6 +39,10 @@ function ContractRow({ num, contract }: { num: number; contract: Contract }) {
     const ref = reverseRef(contractRef);
     selectedContract.value = ref;
     blockchain.changeToken(ref);
+    if (miningStatus.value !== "ready") {
+      addMessage({ type: "stop" });
+    }
+    miner.stop();
     navigate("/");
   };
 
