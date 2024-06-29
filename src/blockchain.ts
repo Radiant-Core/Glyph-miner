@@ -271,6 +271,9 @@ async function recoverFromError() {
       type: "general",
       msg: "Waiting for contract",
     });
+    if (miningEnabled.value) {
+      miner.start();
+    }
   }
 }
 
