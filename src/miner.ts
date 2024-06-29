@@ -10,12 +10,12 @@ import {
   hashrate,
   miningStatus,
   mintMessage,
-  nonces,
   wallet,
   work as workSignal,
 } from "./signals";
 import { addMessage } from "./message";
 import { createWork, powPreimage } from "./pow";
+import { foundNonce } from "./blockchain";
 
 function signedToHex(number: number) {
   let value = Math.max(-2147483648, Math.min(2147483647, number));
@@ -86,7 +86,7 @@ function verify(target: bigint, partialPreimage: Uint8Array, nonce: string) {
   return num < target;
 }
 
-const stop = async () => {
+async function stop() {
   console.debug("miner.stop called");
   if (miningStatus.value !== "ready") {
     miningStatus.value = "stop";
@@ -101,7 +101,7 @@ const stop = async () => {
     });
   }
   return true;
-};
+}
 
 function powMidstate(work: Work) {
   const preimage = powPreimage(work);
@@ -238,7 +238,7 @@ const start = async () => {
       )}`;
       if (verify(work.target, midstate.preimage, nonce)) {
         console.log("Verified", nonce);
-        nonces.value = [...nonces.value, nonce];
+        foundNonce(nonce);
         addMessage({
           type: "found",
           nonce,

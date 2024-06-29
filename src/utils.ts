@@ -1,4 +1,14 @@
-import { swapEndianness } from "@bitauth/libauth";
+import {
+  Opcodes,
+  bigIntToVmNumber,
+  encodeDataPush,
+  numberToBinUint32LEClamped,
+  pushNumberOpcodeToNumber,
+  swapEndianness,
+  vmNumberToBigInt,
+} from "@bitauth/libauth";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
+import { sha256 } from "@noble/hashes/sha256";
 
 export function photonsToRXD(photons: number, exact?: boolean) {
   const fixed = photons / 100000000;
@@ -47,4 +57,36 @@ export function arrayChunks<T = unknown>(arr: T[], chunkSize: number) {
   }
 
   return chunks;
+}
+
+export function opcodeToNum(n: string) {
+  if (n.startsWith("OP_")) {
+    const num = pushNumberOpcodeToNumber(Opcodes[n as keyof typeof Opcodes]);
+    if (num === false) return false;
+    return BigInt(num);
+  }
+
+  const num = vmNumberToBigInt(hexToBytes(n), {
+    requireMinimalEncoding: false,
+  });
+
+  if (typeof num === "bigint") {
+    return num;
+  }
+
+  return false;
+}
+
+export function scriptHash(bytecode: Uint8Array): string {
+  return swapEndianness(bytesToHex(sha256(bytecode)));
+}
+
+// Push a positive number as a 4 bytes little endian
+export function push4bytes(n: number) {
+  return bytesToHex(encodeDataPush(numberToBinUint32LEClamped(n)));
+}
+
+// Push a number with minimal encoding
+export function pushMinimal(n: bigint | number) {
+  return bytesToHex(encodeDataPush(bigIntToVmNumber(BigInt(n))));
 }

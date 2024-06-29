@@ -33,10 +33,10 @@ import {
   wallet,
 } from "../signals";
 import Balance from "../Balance";
-import { sweepWallet } from "../blockchain";
 import { Script } from "@radiantblockchain/radiantjs";
 import { Link } from "react-router-dom";
 import { connect } from "../client";
+import { sweepWallet } from "../sweep";
 
 export default function Settings() {
   useSignals();
