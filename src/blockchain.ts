@@ -208,12 +208,16 @@ function startSubscriptionCheckTimer() {
 function startContractCheckTimer(duration = 60000, fullRecovery = false) {
   clearTimeout(contractCheckTimer);
   contractCheckTimer = setTimeout(() => {
-    if (fullRecovery) {
-      // Pause mining and update unspent and contract
-      recoverFromError();
-    } else if (contract.value) {
-      // Only refresh contract
-      updateContract();
+    try {
+      if (fullRecovery) {
+        // Pause mining and update unspent and contract
+        recoverFromError();
+      } else if (contract.value) {
+        // Only refresh contract
+        updateContract();
+      }
+    } catch (error) {
+      console.debug("Contract check error", error);
     }
     startContractCheckTimer();
   }, duration);
@@ -265,10 +269,7 @@ async function recoverFromError() {
     loadingContract.value = false;
     addMessage({
       type: "general",
-      msg: "Could not fetch contract",
-    });
-    addMessage({
-      type: "stop",
+      msg: "Waiting for contract",
     });
   }
 }
