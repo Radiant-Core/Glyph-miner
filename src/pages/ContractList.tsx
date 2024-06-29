@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useClipboard } from "@chakra-ui/react";
-import { blockchain, getCachedTokenContracts } from "../blockchain";
+import { changeToken } from "../blockchain";
 import {
   Box,
   Button,
@@ -25,11 +25,12 @@ import {
 import { LuRefreshCw } from "react-icons/lu";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ContractGroup, Contract } from "../types";
-import { miningStatus, selectedContract } from "../signals";
+import { miningEnabled, miningStatus, selectedContract } from "../signals";
 import ShortId from "../ShortId";
 import { reverseRef } from "../utils";
 import miner from "../miner";
 import { addMessage } from "../message";
+import { getCachedTokenContracts } from "../deployments";
 
 function ContractRow({ num, contract }: { num: number; contract: Contract }) {
   const navigate = useNavigate();
@@ -38,11 +39,12 @@ function ContractRow({ num, contract }: { num: number; contract: Contract }) {
   const load = () => {
     const ref = reverseRef(contractRef);
     selectedContract.value = ref;
-    blockchain.changeToken(ref);
+    changeToken(ref);
     if (miningStatus.value !== "ready") {
       addMessage({ type: "stop" });
     }
     miner.stop();
+    miningEnabled.value = false;
     navigate("/");
   };
 

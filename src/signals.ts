@@ -13,19 +13,21 @@ export const wallet = signal<Wallet | undefined>(undefined);
 export const balance = signal(0);
 export const utxos = signal<Utxo[]>([]);
 export const gpu = signal<string | undefined>(""); // undefined means unsupported
+export const selectedContract = signal("");
+export const contract = signal<Contract | undefined>(undefined);
+export const glyph = signal<Glyph | undefined>(undefined);
+export const work = signal<Work | undefined>(undefined);
+export const miningEnabled = signal(false); // The user requested state of the miner
+export const miningStatus = signal<"stop" | "change" | "mining" | "ready">( // The actual state of the miner
+  "ready"
+);
+export const loadingContract = signal(false);
+
+// Settings
 export const mineToAddress = signal("");
 export const mintMessage = signal("");
 export const hideMessages = signal(false);
-export const selectedContract = signal("");
-export const contract = signal<Contract | undefined>(undefined);
 export const contractsUrl = signal("");
-export const glyph = signal<Glyph | undefined>(undefined);
-export const work = signal<Work | undefined>(undefined);
-export const miningStatus = signal<"stop" | "change" | "mining" | "ready">(
-  "ready"
-);
-export const nonces = signal<string[]>([]);
-export const loadingContract = signal(false);
 
 let timer = 0;
 let done = false;

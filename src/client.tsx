@@ -1,8 +1,10 @@
 import { signal } from "@preact/signals-react";
 import { ElectrumWS } from "ws-electrumx-client";
 import miner from "./miner";
-import { miningStatus, servers } from "./signals";
+import { miningEnabled, miningStatus, servers } from "./signals";
 import { subscribeToAddress } from "./blockchain";
+import { Transaction } from "@radiantblockchain/radiantjs";
+import localforage from "localforage";
 
 export enum ServerStatus {
   DISCONNECTED,
@@ -61,7 +63,7 @@ export async function connect(newServerList = false) {
     autoStopTimer = 0 as unknown as Timeout;
     autoReconnectTimer = 0 as unknown as Timeout;
 
-    if (didAutoStop) {
+    if (didAutoStop && miningEnabled.value) {
       miner.start();
     }
 
@@ -89,4 +91,28 @@ export async function connect(newServerList = false) {
   serverStatus.value = ServerStatus.CONNECTING;
 
   subscribeToAddress();
+}
+
+export async function fetchTx(txid: string, fresh: boolean) {
+  const cached = fresh ? undefined : await localforage.getItem<string>(txid);
+  if (cached) {
+    return new Transaction(cached);
+  }
+  const hex = await client.request("blockchain.transaction.get", txid);
+  localforage.setItem(txid, hex);
+  return new Transaction(hex);
+}
+
+export async function fetchRef(ref: string) {
+  const ids = (await client.request("blockchain.ref.get", ref)) as {
+    tx_hash: string;
+  }[];
+  if (ids.length) {
+    return [ids[0], ids[ids.length - 1]];
+  }
+  return [];
+}
+
+export async function broadcast(hex: string) {
+  return await client.request("blockchain.transaction.broadcast", hex);
 }

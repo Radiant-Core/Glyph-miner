@@ -26,11 +26,12 @@ import {
   contract,
   gpu,
   mineToAddress,
+  miningEnabled,
   miningStatus,
   selectedContract,
   work,
 } from "../signals";
-import { blockchain } from "../blockchain";
+import { changeToken } from "../blockchain";
 import Rejected from "../Rejected";
 import TopBar from "../TopBar";
 import "../initGpu";
@@ -48,7 +49,7 @@ export default function Miner() {
   const { start, stop } = miner;
   const refInput = useRef<HTMLInputElement>(null);
 
-  const changeToken = (event: React.FormEvent) => {
+  const onSubmit = (event: React.FormEvent) => {
     event.preventDefault();
     const ref = (refInput.current?.value as string) || "";
     if (!isRef(ref)) {
@@ -64,7 +65,7 @@ export default function Miner() {
       addMessage({ type: "stop" });
     }
     stop();
-    blockchain.changeToken(ref);
+    changeToken(ref);
   };
 
   const startMining = () => {
@@ -75,6 +76,7 @@ export default function Miner() {
 
     if (work.value) {
       addMessage({ type: "start" });
+      miningEnabled.value = true;
       start();
     } else {
       console.log("Invalid work");
@@ -84,6 +86,7 @@ export default function Miner() {
   const stopMining = async () => {
     if (miningStatus.value !== "ready" && miningStatus.value !== "stop") {
       await stop();
+      miningEnabled.value = false;
       addMessage({ type: "stop" });
       console.log("Stopped miner");
     }
@@ -104,7 +107,7 @@ export default function Miner() {
       <BottomBar />
       <Box bg="bg.300" mt="56px">
         <Container maxW="container.lg">
-          <form onSubmit={changeToken}>
+          <form onSubmit={onSubmit}>
             <Flex gap={4} mx="auto" py={4}>
               <IconButton
                 display={{ base: "flex", sm: "none" }}
@@ -155,7 +158,13 @@ export default function Miner() {
             <Box>
               <Hashrate />
             </Box>
-            {miningStatus.value === "ready" ? (
+            {miningEnabled.value ? (
+              <IconButton
+                onClick={stopMining}
+                icon={<Icon as={FaStop} />}
+                aria-label="Stop mining"
+              />
+            ) : (
               <IconButton
                 onClick={startMining}
                 isDisabled={!canStart}
@@ -166,12 +175,6 @@ export default function Miner() {
                   />
                 }
                 aria-label="Start mining"
-              />
-            ) : (
-              <IconButton
-                onClick={stopMining}
-                icon={<Icon as={FaStop} />}
-                aria-label="Stop mining"
               />
             )}
           </Flex>
