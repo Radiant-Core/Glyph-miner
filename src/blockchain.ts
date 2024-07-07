@@ -242,7 +242,8 @@ const updateUnspent = async () => {
   }
 };
 
-async function recoverFromError() {
+// Resubscribe to everything and restart mining
+export async function recoverFromError() {
   if (!contract.value?.contractRef) {
     return;
   }

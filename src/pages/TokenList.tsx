@@ -80,7 +80,7 @@ function TokenRow({ token }: { token: ContractGroup }) {
         {((Number(mintedSupply) / Number(totalSupply)) * 100).toFixed(2)}%
       </Td>
       <Td isNumeric>{numContracts}</Td>
-      <Td isNumeric>{`${reward}`}</Td>
+      <Td isNumeric>{reward.toLocaleString()}</Td>
       <Td isNumeric>{`${difficulty}`}</Td>
       <Td isNumeric>
         <IconButton

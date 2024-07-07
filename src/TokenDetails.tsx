@@ -86,7 +86,7 @@ export default function TokenDetails() {
       <Box borderRight="2px" borderRightColor="whiteAlpha.400" pr={4}>
         Reward:{" "}
         <b>
-          {`${reward}`} {ticker.substring(0, 20)}
+          {reward.toLocaleString()} {ticker.substring(0, 20)}
         </b>
       </Box>
       <div>
