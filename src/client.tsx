@@ -1,10 +1,11 @@
 import { signal } from "@preact/signals-react";
 import { ElectrumWS } from "ws-electrumx-client";
 import miner from "./miner";
-import { miningEnabled, miningStatus, servers } from "./signals";
-import { subscribeToAddress } from "./blockchain";
+import { miningEnabled, servers } from "./signals";
+import { recoverFromError, subscribeToAddress } from "./blockchain";
 import { Transaction } from "@radiantblockchain/radiantjs";
 import localforage from "localforage";
+import { addMessage } from "./message";
 
 export enum ServerStatus {
   DISCONNECTED,
@@ -14,28 +15,111 @@ export enum ServerStatus {
 export const serverStatus = signal(ServerStatus.DISCONNECTED);
 export let client: ElectrumWS;
 type Timeout = ReturnType<typeof setTimeout>;
+type Interval = ReturnType<typeof setInterval>;
 
 let serverNum = 0;
 let autoStopTimer: Timeout;
 let autoReconnectTimer: Timeout;
 let connectionTimer: Timeout;
-let didAutoStop = false;
+let connectAttemptCounter = 0;
 
 function startConnectionTimer() {
   clearTimeout(connectionTimer);
   connectionTimer = setTimeout(() => {
-    client?.close("");
+    console.debug("Connection timed out");
+    onClose(false);
   }, 10000);
 }
 
 function startAutoReconnectTimer() {
   if (!autoReconnectTimer) {
-    autoReconnectTimer = setTimeout(() => {
-      // Try the next server
-      serverNum = (serverNum + 1) % servers.value.length;
-      console.debug("Attempting to reconnect");
-      connect();
-    }, 10000);
+    const allServersAttempted =
+      connectAttemptCounter > 0 &&
+      connectAttemptCounter % servers.value.length === 0;
+    autoReconnectTimer = setTimeout(
+      () => {
+        // Try the next server
+        serverNum = (serverNum + 1) % servers.value.length;
+        console.debug("Attempting to reconnect");
+        connect();
+      },
+      allServersAttempted ? 120000 : 10000
+    );
+  }
+}
+
+let heartbeatInterval: Interval;
+async function heartbeat() {
+  const n = serverNum;
+  const pong = await Promise.race([
+    client.request("server.ping"),
+    new Promise((resolve) => {
+      // Time out after 10 seconds
+      setTimeout(() => resolve(false), 10000);
+    }),
+  ]);
+
+  // If server changed while waiting for a response then discard this heartbeat
+  if (n !== serverNum) {
+    return;
+  }
+
+  // This happens if the network connection is lost
+  // If the server is down then the close function will be called instead
+  // Close will also be called when network connection is reestablished
+  if (pong !== null && serverStatus.value != ServerStatus.DISCONNECTED) {
+    addMessage({
+      type: "general",
+      msg: "Connection lost, waiting to reconnect",
+    });
+    serverStatus.value = ServerStatus.DISCONNECTED;
+    addMessage({ type: "stop" });
+    miner.stop();
+  }
+
+  if (pong === null && serverStatus.value === ServerStatus.DISCONNECTED) {
+    serverStatus.value = ServerStatus.CONNECTED;
+    if (miningEnabled.value) {
+      recoverFromError();
+    }
+  }
+}
+
+function onClose(wasClean: boolean) {
+  console.debug("Close");
+  clearTimeout(connectionTimer);
+  clearTimeout(autoReconnectTimer);
+  connectionTimer = 0 as unknown as Timeout;
+  autoReconnectTimer = 0 as unknown as Timeout;
+  if (!wasClean) {
+    connectAttemptCounter++;
+
+    if (connectAttemptCounter >= servers.value.length) {
+      addMessage({
+        type: "general",
+        msg: "All servers unresponsive, waiting to reconnect",
+      });
+    } else {
+      addMessage({
+        type: "general",
+        msg: "Server disconnected, waiting to reconnect",
+      });
+    }
+  }
+  serverStatus.value = ServerStatus.DISCONNECTED;
+  if (miningEnabled.value) {
+    // If mining, wait for 10 seconds before auto stopping
+    if (!autoStopTimer) {
+      autoStopTimer = setTimeout(() => {
+        console.debug("Auto stopped miner");
+        miner.stop();
+        addMessage({ type: "stop" });
+        startAutoReconnectTimer();
+      }, 10000);
+    }
+  } else {
+    // Not mining, so start auto reconnect timer immediately
+    startAutoReconnectTimer();
   }
 }
 
@@ -54,38 +138,36 @@ export async function connect(newServerList = false) {
   client = new ElectrumWS(server);
   console.debug(`Connecting to ${server}`);
   startConnectionTimer();
+  client.on("disconnected", () => {
+    console.debug("Disconnected");
+  });
   client.on("connected", () => {
+    connectAttemptCounter = 0;
     clearTimeout(connectionTimer);
+    clearInterval(heartbeatInterval);
+    connectionTimer = 0 as unknown as Timeout;
+    heartbeatInterval = 0 as unknown as Interval;
+    // Check connection is alive every 30 seconds
+    heartbeatInterval = setInterval(heartbeat, 30000);
     console.debug(`Connected to ${server}`);
+    addMessage({
+      type: "general",
+      msg: `Connected to ${server}`,
+    });
     serverStatus.value = ServerStatus.CONNECTED;
     clearTimeout(autoStopTimer);
     clearTimeout(autoReconnectTimer);
     autoStopTimer = 0 as unknown as Timeout;
     autoReconnectTimer = 0 as unknown as Timeout;
 
-    if (didAutoStop && miningEnabled.value) {
-      miner.start();
+    if (miningEnabled.value) {
+      // Resubscribe to everything and restart mining
+      recoverFromError();
     }
-
-    didAutoStop = false;
   });
-  client.on("close", () => {
-    console.debug("Close");
-    serverStatus.value = ServerStatus.DISCONNECTED;
-    // If mining, wait for 10 seconds before auto stopping
-    if (miningStatus.value !== "ready") {
-      if (!autoStopTimer) {
-        autoStopTimer = setTimeout(() => {
-          console.debug("Auto stopped miner");
-          didAutoStop = true;
-          miner.stop();
-          startAutoReconnectTimer();
-        }, 10000);
-      }
-    } else {
-      // Not mining, so start auto reconnect timer immediately
-      startAutoReconnectTimer();
-    }
+  client.on("close", (event) => {
+    console.log("Close event received");
+    onClose((event as CloseEvent).wasClean);
   });
 
   serverStatus.value = ServerStatus.CONNECTING;

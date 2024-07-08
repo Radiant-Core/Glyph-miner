@@ -84,9 +84,9 @@ export default function Miner() {
   };
 
   const stopMining = async () => {
+    miningEnabled.value = false;
     if (miningStatus.value !== "ready" && miningStatus.value !== "stop") {
       await stop();
-      miningEnabled.value = false;
       addMessage({ type: "stop" });
       console.log("Stopped miner");
     }
