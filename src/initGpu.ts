@@ -4,8 +4,9 @@ import { gpu } from "./signals";
 const adapter = await navigator.gpu?.requestAdapter({
   powerPreference: "high-performance",
 });
-if (!adapter) {
+// Browsers with an old webgpu version will not have adapter.info
+if (!adapter || !adapter.info) {
   gpu.value = undefined;
 }
-const info = await adapter?.requestAdapterInfo();
+const info = adapter?.info;
 gpu.value = info?.description || info?.vendor || info?.device;
