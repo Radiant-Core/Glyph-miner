@@ -6,16 +6,9 @@ import { PropsWithChildren } from "react";
 import { useSignals } from "@preact/signals-react/runtime";
 
 export function TokenImage({ type, file }: { type: string; file: Uint8Array }) {
-  return (
-    <Image
-      w={6}
-      h={6}
-      objectFit="contain"
-      src={`data:${type};base64, ${btoa(
-        String.fromCharCode(...new Uint8Array(file))
-      )}`}
-    />
-  );
+  const blob = new Blob([file], { type });
+  const src = URL.createObjectURL(blob);
+  return <Image w={6} h={6} objectFit="contain" src={src} />;
 }
 
 function TextRow({ children }: PropsWithChildren) {
