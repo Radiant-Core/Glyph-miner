@@ -5,8 +5,90 @@ import type { Contract, Glyph } from "./types";
 import { isRef, opcodeToNum, push4bytes, pushMinimal, reverseRef } from "./utils";
 import { swapEndianness } from "@bitauth/libauth";
 import { fetchRef, fetchTx } from "./client";
+import { 
+  GlyphProtocol, 
+  DmintAlgorithmId, 
+  DaaModeId,
+  GLYPH_VERSION,
+} from "./types";
 
 export const glyphHex = "676c79"; // gly
+export const glyphMagic = Buffer.from("gly", "ascii");
+
+/**
+ * Glyph v2 envelope flags
+ */
+export const EnvelopeFlags = {
+  HAS_CONTENT_ROOT: 1 << 0,
+  HAS_CONTROLLER: 1 << 1,
+  HAS_PROFILE_HINT: 1 << 2,
+  IS_REVEAL: 1 << 7,
+} as const;
+
+/**
+ * Check if protocols indicate a v2 dMint token
+ */
+export function isDmintToken(protocols: number[]): boolean {
+  return protocols.includes(GlyphProtocol.GLYPH_FT) && 
+         protocols.includes(GlyphProtocol.GLYPH_DMINT);
+}
+
+/**
+ * Get algorithm name from ID
+ */
+export function getAlgorithmName(algoId: number): string {
+  switch (algoId) {
+    case DmintAlgorithmId.SHA256D: return 'SHA256d';
+    case DmintAlgorithmId.BLAKE3: return 'Blake3';
+    case DmintAlgorithmId.K12: return 'KangarooTwelve';
+    case DmintAlgorithmId.ARGON2ID_LIGHT: return 'Argon2id-Light';
+    case DmintAlgorithmId.RANDOMX_LIGHT: return 'RandomX-Light';
+    default: return 'Unknown';
+  }
+}
+
+/**
+ * Get DAA mode name from ID
+ */
+export function getDaaModeName(modeId: number): string {
+  switch (modeId) {
+    case DaaModeId.FIXED: return 'Fixed';
+    case DaaModeId.EPOCH: return 'Epoch';
+    case DaaModeId.ASERT: return 'ASERT';
+    case DaaModeId.LWMA: return 'LWMA';
+    case DaaModeId.SCHEDULE: return 'Schedule';
+    default: return 'Unknown';
+  }
+}
+
+/**
+ * Parse v2 dMint metadata
+ */
+export function parseDmintMetadata(payload: Record<string, unknown>): {
+  algorithm: number;
+  daaMode: number;
+  maxSupply?: bigint;
+  reward?: bigint;
+  difficulty?: bigint;
+} | undefined {
+  const dmint = payload.dmint as Record<string, unknown> | undefined;
+  if (!dmint) return undefined;
+
+  return {
+    algorithm: typeof dmint.algo === 'number' ? dmint.algo : DmintAlgorithmId.SHA256D,
+    daaMode: typeof dmint.daa === 'number' ? dmint.daa : DaaModeId.FIXED,
+    maxSupply: typeof dmint.max === 'bigint' ? dmint.max : undefined,
+    reward: typeof dmint.reward === 'bigint' ? dmint.reward : undefined,
+    difficulty: typeof dmint.diff === 'bigint' ? dmint.diff : undefined,
+  };
+}
+
+/**
+ * Check if this is a v2 glyph based on version field
+ */
+export function isGlyphV2(payload: Record<string, unknown>): boolean {
+  return payload.v === GLYPH_VERSION;
+}
 
 export function decodeGlyph(script: Script): undefined | Glyph {
   let result: { payload: { [key: string]: unknown } } = {
