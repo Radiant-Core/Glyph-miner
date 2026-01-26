@@ -1,5 +1,9 @@
 import { PrivateKey } from "@radiantblockchain/radiantjs";
 
+export type AlgorithmId = 'sha256d' | 'blake3' | 'k12' | 'argon2light';
+
+export type DAAMode = 'fixed' | 'epoch' | 'asert' | 'lwma' | 'schedule';
+
 export type Contract = {
   location: string;
   outputIndex: number;
@@ -11,6 +15,10 @@ export type Contract = {
   target: bigint;
   script: string;
   message: string;
+  // Enhanced contract fields
+  algorithm?: AlgorithmId;
+  daaMode?: DAAMode;
+  daaParams?: any;
 };
 
 export type ContractGroup = {
@@ -47,6 +55,7 @@ export type Work = {
   inputScript: Uint8Array;
   outputScript: Uint8Array;
   target: bigint;
+  algorithm?: AlgorithmId;
 };
 
 export type Wallet = {

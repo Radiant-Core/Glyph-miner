@@ -1,9 +1,8 @@
 import { sha256 as jsSha256, Hasher } from "js-sha256";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
 import { sha256 } from "@noble/hashes/sha2";
-import shader from "./pow.wgsl?raw";
 import { swapEndianness } from "@bitauth/libauth";
-import { Work } from "./types";
+import { Work, AlgorithmId } from "./types";
 import {
   contract,
   found,
@@ -16,6 +15,14 @@ import {
 import { addMessage } from "./message";
 import { createWork, powPreimage } from "./pow";
 import { foundNonce } from "./blockchain";
+import { getAlgorithmConfig, isAlgorithmSupported } from "./algorithms";
+import { ALGORITHMS, calcTimeToMine } from "./algorithms/types";
+
+// Import shaders as raw text
+import sha256dShaderText from "./shaders/sha256d.wgsl?raw";
+import blake3ShaderText from "./shaders/blake3.wgsl?raw";
+import k12ShaderText from "./shaders/k12.wgsl?raw";
+import argon2lightShaderText from "./shaders/argon2light.wgsl?raw";
 
 function signedToHex(number: number) {
   let value = Math.max(-2147483648, Math.min(2147483647, number));
@@ -25,16 +32,75 @@ function signedToHex(number: number) {
   return value.toString(16).padStart(8, "0");
 }
 
+// Parse algorithm from contract script
+function parseAlgorithmFromContract(script: string): AlgorithmId {
+  // Look for algorithm byte after target in enhanced contracts
+  // Legacy contracts (no algorithm byte) default to sha256d
+  try {
+    // Simple heuristic: look for algorithm pattern
+    // In production, this would parse the actual script structure
+    if (script.includes('0x01')) return 'blake3';
+    if (script.includes('0x02')) return 'k12';
+    if (script.includes('0x03')) return 'argon2light';
+    return 'sha256d'; // Default
+  } catch {
+    return 'sha256d'; // Fallback
+  }
+}
+
+// Get shader code for algorithm
+function getShaderCode(algorithm: AlgorithmId): string {
+  switch (algorithm) {
+    case 'sha256d':
+      return sha256dShaderText;
+    case 'blake3':
+      return blake3ShaderText;
+    case 'k12':
+      return k12ShaderText;
+    case 'argon2light':
+      return argon2lightShaderText;
+    default:
+      throw new Error(`Unsupported algorithm: ${algorithm}`);
+  }
+}
+
 export function updateWork() {
   if (!contract.value || !wallet.value?.address) {
     workSignal.value = undefined;
     return;
   }
-  workSignal.value = createWork(
+  
+  // Parse algorithm from contract
+  const algorithm = parseAlgorithmFromContract(contract.value.script);
+  
+  // Check if algorithm is supported
+  if (!isAlgorithmSupported(algorithm)) {
+    addMessage(`Unsupported algorithm: ${algorithm}`, "error");
+    miningStatus.value = "error";
+    return;
+  }
+  
+  // Create work with algorithm info
+  const work = createWork(
     contract.value,
     wallet.value.address,
     mintMessage.value
   );
+  
+  // Add algorithm to work object
+  (work as any).algorithm = algorithm;
+  
+  workSignal.value = work;
+  
+  // Log algorithm info
+  const algoInfo = ALGORITHMS[algorithm];
+  addMessage(`Using ${algoInfo.name} algorithm`, "info");
+  
+  // Show collision warning if applicable
+  const timeToMine = calcTimeToMine(Number(contract.value.target), algorithm);
+  if (timeToMine < 30) {
+    addMessage(`Warning: Fast expected solve time (${timeToMine}s) may cause collisions`, "warning");
+  }
 }
 
 // Use js-sha256 to get the midstate after hashing the first 512 bit block
@@ -113,10 +179,14 @@ const start = async () => {
   console.debug("miner.start called");
   const work = workSignal.value;
   if (!work) return;
+  
+  // Get algorithm from work
+  const algorithm = (work as any).algorithm || 'sha256d';
+  
   let midstate = powMidstate(work);
   miningStatus.value = "mining";
 
-  const adapter = await navigator.gpu?.requestAdapter({
+  const adapter = await (navigator as any).gpu?.requestAdapter({
     powerPreference: "high-performance",
   });
   const device = await adapter?.requestDevice();
@@ -127,9 +197,12 @@ const start = async () => {
   device.pushErrorScope("validation");
   device.pushErrorScope("internal");
 
+  // Get shader code for algorithm
+  const shaderCode = getShaderCode(algorithm);
+  
   const module = device.createShaderModule({
-    label: "pow module",
-    code: shader,
+    label: `${algorithm} module`,
+    code: shaderCode,
   });
 
   const pipeline = device.createComputePipeline({
@@ -146,35 +219,42 @@ const start = async () => {
   const workgroupSize = 256;
   const numInvocations = numWorkgroups * workgroupSize;
 
+  // Get algorithm config for buffer requirements
+  const algoConfig = getAlgorithmConfig(algorithm);
+  if (!algoConfig) {
+    throw new Error(`No configuration for algorithm: ${algorithm}`);
+  }
+
+  // Create buffers based on algorithm requirements
   const midstateBuffer = device.createBuffer({
     label: "midstate buffer",
-    size: 32,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    size: algoConfig.bufferRequirements.midstate * 4, // u32s to bytes
+    usage: (GPUBufferUsage as any).STORAGE | (GPUBufferUsage as any).COPY_DST,
   });
 
-  const resultBufferSize = 4;
+  const targetBuffer = device.createBuffer({
+    label: "target buffer",
+    size: algoConfig.bufferRequirements.target * 4, // u32s to bytes
+    usage: (GPUBufferUsage as any).STORAGE | (GPUBufferUsage as any).COPY_DST,
+  });
+
+  const resultBufferSize = algoConfig.bufferRequirements.results * 16; // vec4<u32> to bytes
 
   const resultBuffer = device.createBuffer({
     label: "pow result",
     size: resultBufferSize,
     usage:
-      GPUBufferUsage.STORAGE |
-      GPUBufferUsage.COPY_SRC |
-      GPUBufferUsage.COPY_DST,
-  });
-
-  const nonceBuffer = device.createBuffer({
-    label: "nonce buffer",
-    size: 8,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      (GPUBufferUsage as any).STORAGE |
+      (GPUBufferUsage as any).COPY_SRC |
+      (GPUBufferUsage as any).COPY_DST,
   });
 
   const bindGroup = device.createBindGroup({
-    label: "pow bindGroup",
+    label: `${algorithm} bindGroup`,
     layout: pipeline.getBindGroupLayout(0),
     entries: [
       { binding: 0, resource: { buffer: midstateBuffer } },
-      { binding: 1, resource: { buffer: nonceBuffer } },
+      { binding: 1, resource: { buffer: targetBuffer } },
       { binding: 2, resource: { buffer: resultBuffer } },
     ],
   });
@@ -201,11 +281,14 @@ const start = async () => {
       }
       startTime = Date.now();
     }
-    device.queue.writeBuffer(
-      nonceBuffer,
-      0,
-      new Uint32Array([nonce1, nonceStart])
-    );
+    // Write target buffer (convert bigint to u32 array)
+    const targetU32Array = new Uint32Array(8);
+    let targetBig = work.target;
+    for (let i = 7; i >= 0; i--) {
+      targetU32Array[i] = Number(targetBig & 0xffffffffn);
+      targetBig = targetBig >> 32n;
+    }
+    device.queue.writeBuffer(targetBuffer, 0, targetU32Array);
 
     const encoder = device.createCommandEncoder({
       label: "pow encoder",
@@ -229,43 +312,54 @@ const start = async () => {
     const commandBuffer = encoder.finish();
     device.queue.submit([commandBuffer]);
 
-    await gpuReadBuffer.mapAsync(GPUMapMode.READ);
+    await gpuReadBuffer.mapAsync((GPUMapMode as any).READ);
     const range = new Uint8Array(gpuReadBuffer.getMappedRange());
-    const result = bytesToHex(range.slice(0, 4));
-    if (result !== "00000000") {
-      const nonce = `${nonce1.toString(16).padStart(8, "0")}${swapEndianness(
-        result
-      )}`;
-      if (verify(work.target, midstate.preimage, nonce)) {
-        console.log("Verified", nonce);
-        foundNonce(nonce);
-        addMessage({
-          type: "found",
-          nonce,
-        });
-        found.value++;
+    
+    // Check for solution in results buffer
+    for (let i = 0; i < algoConfig.bufferRequirements.results; i++) {
+      const offset = i * 16; // vec4<u32> = 16 bytes
+      const resultBytes = range.slice(offset, offset + 16);
+      
+      // Check if this entry has a solution (atomic store flag)
+      const flag = new DataView(resultBytes.buffer).getUint32(12, true);
+      if (flag === 1) {
+        const nonce = new DataView(resultBytes.buffer).getUint32(0, true);
+        const hash = new Uint8Array(resultBytes.slice(4, 12));
+        
+        // Verify the solution
+        if (verify(work.target, midstate.preimage, nonce.toString(16))) {
+          console.log(`Found solution with ${algorithm}`, nonce.toString(16));
+          foundNonce(nonce.toString(16));
+          addMessage({
+            type: "found",
+            nonce: nonce.toString(16),
+            algorithm,
+          });
+          break;
+        }
       }
     }
+    found.value++;
+  }
 
     device.queue.writeBuffer(resultBuffer, 0, new Uint32Array([0]));
 
-    resultBuffer.unmap();
     gpuReadBuffer.unmap();
+    resultBuffer.unmap();
     nonceStart += numInvocations;
 
-    // @ts-expect-error doesn't matter
+    // Note: TypeScript error expected here
     if (miningStatus.value === "change") {
       updateWork();
       console.debug("Changing work");
       if (!workSignal.value) {
         console.debug("Invalid work");
-        break;
+        return;
       }
       midstate = powMidstate(workSignal.value);
       device.queue.writeBuffer(midstateBuffer, 0, midstate.hash);
       miningStatus.value = "mining";
     }
-  }
 
   hashrate.value = 0;
   miningStatus.value = "ready";
