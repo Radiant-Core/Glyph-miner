@@ -1,6 +1,49 @@
 import { PrivateKey } from "@radiantblockchain/radiantjs";
 
-export type AlgorithmId = 'sha256d' | 'blake3' | 'k12' | 'argon2light';
+/**
+ * Glyph v2 Token Standard Types
+ * Reference: https://github.com/Radiant-Core/Glyph-Token-Standards
+ */
+
+// Protocol version
+export const GLYPH_VERSION = 2;
+
+// Protocol IDs per Glyph v2 spec
+export const GlyphProtocol = {
+  GLYPH_FT: 1,
+  GLYPH_NFT: 2,
+  GLYPH_DAT: 3,
+  GLYPH_DMINT: 4,
+  GLYPH_MUT: 5,
+  GLYPH_BURN: 6,
+  GLYPH_CONTAINER: 7,
+  GLYPH_ENCRYPTED: 8,
+  GLYPH_TIMELOCK: 9,
+  GLYPH_AUTHORITY: 10,
+  GLYPH_WAVE: 11,
+} as const;
+
+export type GlyphProtocolId = typeof GlyphProtocol[keyof typeof GlyphProtocol];
+
+// Algorithm IDs per Glyph v2 dMint spec (REP-3010)
+export const DmintAlgorithmId = {
+  SHA256D: 0x00,
+  BLAKE3: 0x01,
+  K12: 0x02,
+  ARGON2ID_LIGHT: 0x03,
+  RANDOMX_LIGHT: 0x04,
+} as const;
+
+export type AlgorithmId = 'sha256d' | 'blake3' | 'k12' | 'argon2light' | 'randomx-light';
+
+// DAA Mode IDs per Glyph v2 dMint spec
+export const DaaModeId = {
+  FIXED: 0x00,
+  EPOCH: 0x01,
+  ASERT: 0x02,
+  LWMA: 0x03,
+  SCHEDULE: 0x04,
+} as const;
 
 export type DAAMode = 'fixed' | 'epoch' | 'asert' | 'lwma' | 'schedule';
 
