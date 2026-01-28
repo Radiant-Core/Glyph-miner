@@ -1,5 +1,5 @@
 import { sha256 as jsSha256, Hasher } from "js-sha256";
-import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
+import { hexToBytes } from "@noble/hashes/utils";
 import { sha256 } from "@noble/hashes/sha2";
 import { swapEndianness } from "@bitauth/libauth";
 import { Work, AlgorithmId } from "./types";
@@ -75,8 +75,8 @@ export function updateWork() {
   
   // Check if algorithm is supported
   if (!isAlgorithmSupported(algorithm)) {
-    addMessage(`Unsupported algorithm: ${algorithm}`, "error");
-    miningStatus.value = "error";
+    addMessage({ type: "general", msg: `Unsupported algorithm: ${algorithm}` });
+    miningStatus.value = "stop";
     return;
   }
   
@@ -94,12 +94,12 @@ export function updateWork() {
   
   // Log algorithm info
   const algoInfo = ALGORITHMS[algorithm];
-  addMessage(`Using ${algoInfo.name} algorithm`, "info");
+  addMessage({ type: "general", msg: `Using ${algoInfo.name} algorithm` });
   
   // Show collision warning if applicable
   const timeToMine = calcTimeToMine(Number(contract.value.target), algorithm);
   if (timeToMine < 30) {
-    addMessage(`Warning: Fast expected solve time (${timeToMine}s) may cause collisions`, "warning");
+    addMessage({ type: "general", msg: `Warning: Fast expected solve time (${timeToMine}s) may cause collisions` });
   }
 }
 
@@ -324,7 +324,7 @@ const start = async () => {
       const flag = new DataView(resultBytes.buffer).getUint32(12, true);
       if (flag === 1) {
         const nonce = new DataView(resultBytes.buffer).getUint32(0, true);
-        const hash = new Uint8Array(resultBytes.slice(4, 12));
+        // const hash = new Uint8Array(resultBytes.slice(4, 12)); // Unused variable
         
         // Verify the solution
         if (verify(work.target, midstate.preimage, nonce.toString(16))) {
@@ -333,7 +333,6 @@ const start = async () => {
           addMessage({
             type: "found",
             nonce: nonce.toString(16),
-            algorithm,
           });
           break;
         }

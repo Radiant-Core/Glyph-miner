@@ -12,7 +12,7 @@ export const sha256dConfig: AlgorithmConfig = {
   },
 };
 
-export function prepareSha256dWork(work: any): Uint8Array {
+export function prepareSha256dWork(_work: any): Uint8Array {
   // Create midstate for SHA256d
   // This is a simplified version - actual implementation needs proper midstate calculation
   const midstate = new Uint8Array(64);

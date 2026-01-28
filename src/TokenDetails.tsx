@@ -6,7 +6,7 @@ import { PropsWithChildren } from "react";
 import { useSignals } from "@preact/signals-react/runtime";
 
 export function TokenImage({ type, file }: { type: string; file: Uint8Array }) {
-  const blob = new Blob([file], { type });
+  const blob = new Blob([file.buffer as ArrayBuffer], { type });
   const src = URL.createObjectURL(blob);
   return <Image w={6} h={6} objectFit="contain" src={src} />;
 }

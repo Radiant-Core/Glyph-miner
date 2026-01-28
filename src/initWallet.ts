@@ -25,9 +25,7 @@ const defaultServers = [
 console.debug("Init wallet");
 wallet.value = openWallet() || createWallet();
 mineToAddress.value = localStorage.getItem("mineToAddress") || "";
-mintMessage.value =
-  localStorage.getItem("mintMessage") ||
-  defaultMessages[Math.floor(Math.random() * defaultMessages.length)];
+mintMessage.value = localStorage.getItem("mintMessage") || "";
 hideMessages.value = localStorage.getItem("hideMessages") === "1";
 contractsUrl.value =
   localStorage.getItem("contractsUrl") ||

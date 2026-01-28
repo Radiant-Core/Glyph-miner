@@ -1,6 +1,6 @@
 // Algorithm types and interfaces for Glyph mining
 
-export type AlgorithmId = 'sha256d' | 'blake3' | 'k12' | 'argon2light';
+export type AlgorithmId = 'sha256d' | 'blake3' | 'k12' | 'argon2light' | 'randomx-light';
 
 export interface MiningAlgorithm {
   id: AlgorithmId;
@@ -56,6 +56,14 @@ export const ALGORITHMS: Record<AlgorithmId, MiningAlgorithm> = {
     gpuFriendly: true,
     recommended: true, // Phase 3 implementation
   },
+  'randomx-light': {
+    id: 'randomx-light',
+    name: 'RandomX-Light',
+    description: 'CPU-friendly RandomX variant for JavaScript',
+    memoryRequirement: 0.256, // 256 KB
+    gpuFriendly: false,
+    recommended: false, // CPU-only algorithm
+  },
 };
 
 // Recommended minimum difficulties to prevent collisions
@@ -64,6 +72,7 @@ export const RECOMMENDED_MIN_DIFFICULTY: Record<AlgorithmId, number> = {
   blake3: 2500000,
   k12: 50000,
   argon2light: 10000,
+  'randomx-light': 50000,
 };
 
 // Expected hashrates on RTX 4090 (hashes/second)
@@ -72,6 +81,7 @@ export const REFERENCE_HASHRATES: Record<AlgorithmId, number> = {
   blake3: 7500000000,  // 7.5 GH/s
   k12: 4000000000,     // 4.0 GH/s
   argon2light: 50000000, // 50 MH/s (memory-bound)
+  'randomx-light': 50000, // 50 KH/s (CPU-only)
 };
 
 // Calculate estimated time to mine

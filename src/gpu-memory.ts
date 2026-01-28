@@ -245,15 +245,10 @@ export function optimizeMemoryParameters(
 
 // Monitor GPU memory usage during mining
 export class GPUMemoryMonitor {
-  private adapter: GPUAdapter;
-  private device: GPUDevice;
-  private memoryInfo: GPUMemoryInfo;
   private usageHistory: Array<{timestamp: number, utilization: number}> = [];
   
-  constructor(adapter: GPUAdapter, device: GPUDevice, memoryInfo: GPUMemoryInfo) {
-    this.adapter = adapter;
-    this.device = device;
-    this.memoryInfo = memoryInfo;
+  constructor(_adapter: GPUAdapter, _device: GPUDevice, _memoryInfo: GPUMemoryInfo) {
+    // Store parameters if needed later
   }
   
   // Estimate current memory usage (simplified)

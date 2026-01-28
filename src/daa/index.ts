@@ -10,7 +10,7 @@ import {
 // DAA Calculator registry
 export class DAARegistry {
   private static calculators: Map<DAAMode, (params: DAAParams) => DAACalculator> = new Map([
-    ['fixed', (params) => new FixedDAA()],
+    ['fixed', (_params) => new FixedDAA()],
     ['epoch', (params) => new EpochDAA(params)],
     ['lwma', (params) => new LWMADAA(params)],
     ['asert', (params) => new ASERTDAA(params)],

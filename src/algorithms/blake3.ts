@@ -12,7 +12,7 @@ export const blake3Config: AlgorithmConfig = {
   },
 };
 
-export function prepareBlake3Work(work: any): Uint8Array {
+export function prepareBlake3Work(_work: any): Uint8Array {
   // Create chaining value for Blake3
   const chainingValue = new Uint8Array(32);
   
