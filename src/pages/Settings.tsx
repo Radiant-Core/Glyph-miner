@@ -30,6 +30,7 @@ import {
   miningStatus,
   mintMessage,
   servers,
+  useIndexerApi,
   wallet,
 } from "../signals";
 import Balance from "../Balance";
@@ -77,6 +78,7 @@ export default function Settings() {
     hideMessages: hideMessages.value ? "1" : "",
     servers: servers.value.join("\n"),
     contractsUrl: contractsUrl.value,
+    useIndexerApi: useIndexerApi.value ? "1" : "",
   });
   const onFormChange = ({
     target: { name, value },
@@ -111,6 +113,7 @@ export default function Settings() {
     mintMessage.value = form.mintMessage;
     hideMessages.value = form.hideMessages === "1";
     contractsUrl.value = form.contractsUrl;
+    useIndexerApi.value = form.useIndexerApi === "1";
     servers.value = serversArray;
 
     localStorage.setItem("mineToAddress", form.mineToAddress);
@@ -118,6 +121,7 @@ export default function Settings() {
     localStorage.setItem("hideMessages", form.hideMessages);
     localStorage.setItem("servers", JSON.stringify(serversArray));
     localStorage.setItem("contractsUrl", form.contractsUrl);
+    localStorage.setItem("useIndexerApi", form.useIndexerApi);
 
     // Update work
     if (miningStatus.value === "mining") {
@@ -192,6 +196,7 @@ export default function Settings() {
               name="hideMessages"
               defaultValue={form.hideMessages}
               onChange={onFormChange}
+              title="Hide messages from other miners"
             >
               <option value="">No</option>
               <option value="1">Yes</option>
@@ -210,12 +215,30 @@ export default function Settings() {
             </FormHelperText>
           </FormControl>
           <FormControl mb={4}>
-            <FormLabel>Contracts URL</FormLabel>
+            <FormLabel>Use RXinDexer API</FormLabel>
+            <Select
+              name="useIndexerApi"
+              defaultValue={form.useIndexerApi}
+              onChange={onFormChange}
+              title="Use RXinDexer API for contract discovery"
+            >
+              <option value="1">Yes (recommended)</option>
+              <option value="">No (use fallback URL)</option>
+            </Select>
+            <FormHelperText>
+              Fetch contracts from RXinDexer dMint API. Falls back to URL if unavailable.
+            </FormHelperText>
+          </FormControl>
+          <FormControl mb={4}>
+            <FormLabel>Contracts URL (fallback)</FormLabel>
             <Input
               name="contractsUrl"
               defaultValue={form.contractsUrl}
               onChange={onFormChange}
             />
+            <FormHelperText>
+              Used when RXinDexer API is disabled or unavailable
+            </FormHelperText>
           </FormControl>
           <Center>
             <Button type="submit">Save</Button>

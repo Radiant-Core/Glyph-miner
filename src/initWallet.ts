@@ -5,16 +5,11 @@ import {
   mineToAddress,
   mintMessage,
   servers,
+  useIndexerApi,
   wallet,
 } from "./signals";
 import { shuffle } from "./utils";
 import { createWallet, openWallet } from "./wallet";
-
-const defaultMessages = [
-  "The future is Radiant 😎",
-  "Radiance 🌄",
-  "Radiate 🌞",
-];
 
 const defaultServers = [
   //"wss://electrumx-testnet.radiant4people.com:53002",
@@ -30,6 +25,8 @@ hideMessages.value = localStorage.getItem("hideMessages") === "1";
 contractsUrl.value =
   localStorage.getItem("contractsUrl") ||
   "https://glyph.radiant4people.com/contracts.json";
+// Default to using RXinDexer API (true unless explicitly disabled)
+useIndexerApi.value = localStorage.getItem("useIndexerApi") !== "";
 
 // If servers isn't saved then set to default servers, randomly sorted
 const storedServers = localStorage.getItem("servers");

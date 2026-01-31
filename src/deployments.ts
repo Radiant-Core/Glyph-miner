@@ -1,12 +1,61 @@
 import { swapEndianness } from "@bitauth/libauth";
 import localforage from "localforage";
 import { fetchToken } from "./glyph";
-import { contractsUrl } from "./signals";
+import { contractsUrl, useIndexerApi } from "./signals";
 import { ContractGroup, Token } from "./types";
 import { arrayChunks } from "./utils";
+import { 
+  fetchContractsSimple, 
+  fetchContractsExtended, 
+  fetchMostProfitable,
+  isDmintApiAvailable,
+  ExtendedContract 
+} from "./dmint-api";
 
-// Temporary replacement for fetchContractUtxos
+// Cache for API availability check
+let apiAvailable: boolean | null = null;
+let apiCheckTime = 0;
+const API_CHECK_INTERVAL = 60000; // Re-check every 60 seconds
+
+/**
+ * Check if RXinDexer dMint API is available (with caching).
+ */
+async function checkApiAvailable(): Promise<boolean> {
+  const now = Date.now();
+  if (apiAvailable !== null && now - apiCheckTime < API_CHECK_INTERVAL) {
+    return apiAvailable;
+  }
+  
+  apiAvailable = await isDmintApiAvailable();
+  apiCheckTime = now;
+  
+  if (apiAvailable) {
+    console.log("RXinDexer dMint API available");
+  } else {
+    console.log("RXinDexer dMint API not available, using fallback URL");
+  }
+  
+  return apiAvailable;
+}
+
+/**
+ * Fetch contracts from RXinDexer API or fallback to static URL.
+ * Tries API first if useIndexerApi is enabled, falls back to static URL.
+ */
 async function fetchCuratedContracts(): Promise<[string, number][]> {
+  // Try RXinDexer API first if enabled
+  if (useIndexerApi.value) {
+    const isAvailable = await checkApiAvailable();
+    
+    if (isAvailable) {
+      const contracts = await fetchContractsSimple();
+      if (contracts.length > 0) {
+        return contracts;
+      }
+    }
+  }
+  
+  // Fallback to static URL
   try {
     const response = await fetch(contractsUrl.value);
     if (!response.ok) {
@@ -16,6 +65,49 @@ async function fetchCuratedContracts(): Promise<[string, number][]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * Fetch contracts with extended metadata from RXinDexer.
+ * Returns null if API not available or useIndexerApi is disabled.
+ */
+export async function fetchExtendedContracts(): Promise<ExtendedContract[] | null> {
+  if (!useIndexerApi.value) {
+    return null;
+  }
+  
+  const isAvailable = await checkApiAvailable();
+  if (!isAvailable) {
+    return null;
+  }
+  
+  const response = await fetchContractsExtended();
+  return response?.contracts || null;
+}
+
+/**
+ * Fetch most profitable contracts from RXinDexer.
+ * Returns null if API not available or useIndexerApi is disabled.
+ */
+export async function fetchProfitableContracts(limit: number = 10): Promise<ExtendedContract[] | null> {
+  if (!useIndexerApi.value) {
+    return null;
+  }
+  
+  const isAvailable = await checkApiAvailable();
+  if (!isAvailable) {
+    return null;
+  }
+  
+  return await fetchMostProfitable(limit);
+}
+
+/**
+ * Reset API availability cache (useful after server change).
+ */
+export function resetApiCache(): void {
+  apiAvailable = null;
+  apiCheckTime = 0;
 }
 
 // Needs improvement to remove spam

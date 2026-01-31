@@ -6,6 +6,7 @@ import { recoverFromError, subscribeToAddress } from "./blockchain";
 import { Transaction } from "@radiantblockchain/radiantjs";
 import localforage from "localforage";
 import { addMessage } from "./message";
+import { resetApiCache } from "./deployments";
 
 export enum ServerStatus {
   DISCONNECTED,
@@ -127,6 +128,9 @@ export async function connect(newServerList = false) {
   if (newServerList) {
     serverNum = 0;
   }
+
+  // Reset API cache when connecting to a new server
+  resetApiCache();
 
   await miner.stop();
 

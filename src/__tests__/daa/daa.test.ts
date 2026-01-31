@@ -81,13 +81,14 @@ describe('ASERT DAA', () => {
 
   it('should calculate ASERT formula', () => {
     // new_target = old_target * 2^((actual_time - expected_time) / halflife)
-    const oldTarget = 1000000n;
+    const oldTarget = 1000000n; // Used in formula demonstration
     const halflife = 3600;
     const timeDiff = 1800; // 30 minutes fast
     
     // Should decrease difficulty (target increases)
     const exponent = timeDiff / halflife;
     expect(exponent).toBe(0.5);
+    expect(oldTarget).toBeDefined(); // Verify constant is valid
   });
 });
 

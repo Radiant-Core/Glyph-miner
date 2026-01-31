@@ -28,6 +28,8 @@ export const mineToAddress = signal("");
 export const mintMessage = signal("");
 export const hideMessages = signal(false);
 export const contractsUrl = signal("");
+// Use RXinDexer dMint API for contract discovery (with fallback to contractsUrl)
+export const useIndexerApi = signal(true);
 
 let timer = 0;
 let done = false;
