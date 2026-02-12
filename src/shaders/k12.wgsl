@@ -1,163 +1,159 @@
-// KangarooTwelve (K12) mining shader for Glyph mining
-// Self-contained implementation with proper WGSL syntax
+// KangarooTwelve (K12) mining shader — correct 64-bit Keccak-p[1600,12]
+// State: 25 lanes x 64 bits = 50 u32s. Lane i = (state[2i], state[2i+1]) = (lo, hi)
+// Mining: K12(preimage(64B) || nonce(4B+pad)) with right_encode(0) framing
 
 @group(0) @binding(0) var<storage, read> midstate: array<u32>;
 @group(0) @binding(1) var<storage, read> target: array<u32>;
 @group(0) @binding(2) var<storage, read_write> results: array<vec4<u32>>;
+@group(0) @binding(3) var<storage, read> nonce_offset: array<u32>;
 
-// Keccak round constants (first 12 for K12)
-const RC0: u32 = 0x00000001u;
-const RC1: u32 = 0x00008082u;
-const RC2: u32 = 0x0000808au;
-const RC3: u32 = 0x80008000u;
-const RC4: u32 = 0x0000808bu;
-const RC5: u32 = 0x80000001u;
-const RC6: u32 = 0x80008081u;
-const RC7: u32 = 0x00008009u;
-const RC8: u32 = 0x0000008au;
-const RC9: u32 = 0x00000088u;
-const RC10: u32 = 0x80008009u;
-const RC11: u32 = 0x8000000au;
-
-// Rotation helper
-fn rotl32(x: u32, n: u32) -> u32 {
-    return (x << n) | (x >> (32u - n));
+// 64-bit left rotation via u32 pair
+fn rotl64(lo: u32, hi: u32, n: u32) -> vec2<u32> {
+    if (n == 0u) { return vec2<u32>(lo, hi); }
+    if (n < 32u) {
+        return vec2<u32>((lo << n) | (hi >> (32u - n)), (hi << n) | (lo >> (32u - n)));
+    }
+    if (n == 32u) { return vec2<u32>(hi, lo); }
+    let m = n - 32u;
+    return vec2<u32>((hi << m) | (lo >> (32u - m)), (lo << m) | (hi >> (32u - m)));
 }
 
-// Theta step
-fn theta(state: ptr<function, array<u32, 25>>) {
-    var c: array<u32, 5>;
-    
-    // Compute column parity
-    for (var i = 0u; i < 5u; i = i + 1u) {
-        c[i] = (*state)[i] ^ (*state)[i + 5u] ^ (*state)[i + 10u] ^ (*state)[i + 15u] ^ (*state)[i + 20u];
-    }
-    
-    // Apply theta transformation
-    for (var i = 0u; i < 5u; i = i + 1u) {
-        let d = c[(i + 4u) % 5u] ^ rotl32(c[(i + 1u) % 5u], 1u);
-        for (var j = 0u; j < 5u; j = j + 1u) {
-            (*state)[i + j * 5u] ^= d;
-        }
+// Round constants for Keccak-p[1600,12] (rounds 12-23), each as (lo, hi)
+fn get_rc(round: u32) -> vec2<u32> {
+    switch(round) {
+        case 0u:  { return vec2<u32>(0x8000808Bu, 0x00000000u); }
+        case 1u:  { return vec2<u32>(0x0000008Bu, 0x80000000u); }
+        case 2u:  { return vec2<u32>(0x00008089u, 0x80000000u); }
+        case 3u:  { return vec2<u32>(0x00008003u, 0x80000000u); }
+        case 4u:  { return vec2<u32>(0x00008002u, 0x80000000u); }
+        case 5u:  { return vec2<u32>(0x00000080u, 0x80000000u); }
+        case 6u:  { return vec2<u32>(0x0000800Au, 0x00000000u); }
+        case 7u:  { return vec2<u32>(0x8000000Au, 0x80000000u); }
+        case 8u:  { return vec2<u32>(0x80008081u, 0x80000000u); }
+        case 9u:  { return vec2<u32>(0x00008080u, 0x80000000u); }
+        case 10u: { return vec2<u32>(0x80000001u, 0x00000000u); }
+        case 11u: { return vec2<u32>(0x80008008u, 0x80000000u); }
+        default:  { return vec2<u32>(0u, 0u); }
     }
 }
 
-// Rho and Pi steps combined
-fn rho_pi(state: ptr<function, array<u32, 25>>) {
-    var temp = (*state)[1u];
-    var idx = 10u;
-    
-    // Rotation amounts for rho
-    let rho_offsets = array<u32, 24>(
-        1u, 3u, 6u, 10u, 15u, 21u, 28u, 36u, 45u, 55u, 2u, 14u,
-        27u, 41u, 56u, 8u, 25u, 43u, 62u, 18u, 39u, 61u, 20u, 44u
-    );
-    
-    for (var i = 0u; i < 24u; i = i + 1u) {
-        let j = idx;
-        idx = (idx * 2u + idx * 3u) % 25u; // Pi transformation index
-        let temp2 = (*state)[j];
-        (*state)[j] = rotl32(temp, rho_offsets[i] % 32u);
-        temp = temp2;
-    }
-}
-
-// Chi step
-fn chi(state: ptr<function, array<u32, 25>>) {
-    for (var j = 0u; j < 5u; j = j + 1u) {
-        let base = j * 5u;
-        let b0 = (*state)[base];
-        let b1 = (*state)[base + 1u];
-        let b2 = (*state)[base + 2u];
-        let b3 = (*state)[base + 3u];
-        let b4 = (*state)[base + 4u];
-        
-        (*state)[base] = b0 ^ (~b1 & b2);
-        (*state)[base + 1u] = b1 ^ (~b2 & b3);
-        (*state)[base + 2u] = b2 ^ (~b3 & b4);
-        (*state)[base + 3u] = b3 ^ (~b4 & b0);
-        (*state)[base + 4u] = b4 ^ (~b0 & b1);
-    }
-}
-
-// Get round constant
-fn get_rc(round: u32) -> u32 {
-    switch (round) {
-        case 0u: { return RC0; }
-        case 1u: { return RC1; }
-        case 2u: { return RC2; }
-        case 3u: { return RC3; }
-        case 4u: { return RC4; }
-        case 5u: { return RC5; }
-        case 6u: { return RC6; }
-        case 7u: { return RC7; }
-        case 8u: { return RC8; }
-        case 9u: { return RC9; }
-        case 10u: { return RC10; }
-        case 11u: { return RC11; }
-        default: { return 0u; }
-    }
-}
-
-// Keccak-p permutation (12 rounds for K12)
-fn keccak_p(state: ptr<function, array<u32, 25>>) {
+fn keccak_p12(state: ptr<function, array<u32, 50>>) {
     for (var round = 0u; round < 12u; round = round + 1u) {
-        theta(state);
-        rho_pi(state);
-        chi(state);
-        (*state)[0u] ^= get_rc(round);
+        // Theta: column parity
+        var c: array<vec2<u32>, 5>;
+        for (var x = 0u; x < 5u; x = x + 1u) {
+            let i0 = x * 2u; let i1 = (x + 5u) * 2u; let i2 = (x + 10u) * 2u;
+            let i3 = (x + 15u) * 2u; let i4 = (x + 20u) * 2u;
+            c[x] = vec2<u32>(
+                (*state)[i0] ^ (*state)[i1] ^ (*state)[i2] ^ (*state)[i3] ^ (*state)[i4],
+                (*state)[i0+1u] ^ (*state)[i1+1u] ^ (*state)[i2+1u] ^ (*state)[i3+1u] ^ (*state)[i4+1u]);
+        }
+        for (var x = 0u; x < 5u; x = x + 1u) {
+            let r = rotl64(c[(x + 1u) % 5u].x, c[(x + 1u) % 5u].y, 1u);
+            let d_lo = c[(x + 4u) % 5u].x ^ r.x;
+            let d_hi = c[(x + 4u) % 5u].y ^ r.y;
+            for (var y = 0u; y < 5u; y = y + 1u) {
+                let idx = (x + y * 5u) * 2u;
+                (*state)[idx] ^= d_lo; (*state)[idx + 1u] ^= d_hi;
+            }
+        }
+        // Rho + Pi combined (hardcoded permutation table)
+        var t: array<u32, 50>;
+        for (var i = 0u; i < 50u; i = i + 1u) { t[i] = (*state)[i]; }
+        var r: vec2<u32>;
+        (*state)[0u] = t[0u]; (*state)[1u] = t[1u]; // B[0]=ROT(A[0],0)
+        r = rotl64(t[12u], t[13u], 44u); (*state)[2u] = r.x; (*state)[3u] = r.y;
+        r = rotl64(t[24u], t[25u], 43u); (*state)[4u] = r.x; (*state)[5u] = r.y;
+        r = rotl64(t[36u], t[37u], 21u); (*state)[6u] = r.x; (*state)[7u] = r.y;
+        r = rotl64(t[48u], t[49u], 14u); (*state)[8u] = r.x; (*state)[9u] = r.y;
+        r = rotl64(t[6u], t[7u], 28u); (*state)[10u] = r.x; (*state)[11u] = r.y;
+        r = rotl64(t[18u], t[19u], 20u); (*state)[12u] = r.x; (*state)[13u] = r.y;
+        r = rotl64(t[20u], t[21u], 3u); (*state)[14u] = r.x; (*state)[15u] = r.y;
+        r = rotl64(t[32u], t[33u], 45u); (*state)[16u] = r.x; (*state)[17u] = r.y;
+        r = rotl64(t[44u], t[45u], 61u); (*state)[18u] = r.x; (*state)[19u] = r.y;
+        r = rotl64(t[2u], t[3u], 1u); (*state)[20u] = r.x; (*state)[21u] = r.y;
+        r = rotl64(t[14u], t[15u], 6u); (*state)[22u] = r.x; (*state)[23u] = r.y;
+        r = rotl64(t[26u], t[27u], 25u); (*state)[24u] = r.x; (*state)[25u] = r.y;
+        r = rotl64(t[38u], t[39u], 8u); (*state)[26u] = r.x; (*state)[27u] = r.y;
+        r = rotl64(t[40u], t[41u], 18u); (*state)[28u] = r.x; (*state)[29u] = r.y;
+        r = rotl64(t[8u], t[9u], 27u); (*state)[30u] = r.x; (*state)[31u] = r.y;
+        r = rotl64(t[10u], t[11u], 36u); (*state)[32u] = r.x; (*state)[33u] = r.y;
+        r = rotl64(t[22u], t[23u], 10u); (*state)[34u] = r.x; (*state)[35u] = r.y;
+        r = rotl64(t[34u], t[35u], 15u); (*state)[36u] = r.x; (*state)[37u] = r.y;
+        r = rotl64(t[46u], t[47u], 56u); (*state)[38u] = r.x; (*state)[39u] = r.y;
+        r = rotl64(t[4u], t[5u], 62u); (*state)[40u] = r.x; (*state)[41u] = r.y;
+        r = rotl64(t[16u], t[17u], 55u); (*state)[42u] = r.x; (*state)[43u] = r.y;
+        r = rotl64(t[28u], t[29u], 39u); (*state)[44u] = r.x; (*state)[45u] = r.y;
+        r = rotl64(t[30u], t[31u], 41u); (*state)[46u] = r.x; (*state)[47u] = r.y;
+        r = rotl64(t[42u], t[43u], 2u); (*state)[48u] = r.x; (*state)[49u] = r.y;
+        // Chi
+        for (var y = 0u; y < 5u; y = y + 1u) {
+            var row: array<vec2<u32>, 5>;
+            for (var x = 0u; x < 5u; x = x + 1u) {
+                let idx = (x + y * 5u) * 2u;
+                row[x] = vec2<u32>((*state)[idx], (*state)[idx + 1u]);
+            }
+            for (var x = 0u; x < 5u; x = x + 1u) {
+                let idx = (x + y * 5u) * 2u;
+                (*state)[idx] = row[x].x ^ (~row[(x+1u) % 5u].x & row[(x+2u) % 5u].x);
+                (*state)[idx + 1u] = row[x].y ^ (~row[(x+1u) % 5u].y & row[(x+2u) % 5u].y);
+            }
+        }
+        // Iota
+        let rc = get_rc(round);
+        (*state)[0u] ^= rc.x; (*state)[1u] ^= rc.y;
     }
 }
 
-// Check if hash meets target
+fn bswap32(x: u32) -> u32 {
+    return ((x & 0xFFu) << 24u) | ((x & 0xFF00u) << 8u) |
+           ((x >> 8u) & 0xFF00u) | (x >> 24u);
+}
+
 fn check_target(hash: array<u32, 8>) -> bool {
-    for (var i = 0u; i < 8u; i = i + 1u) {
-        if (hash[i] < target[i]) {
-            return true;
-        }
-        if (hash[i] > target[i]) {
-            return false;
-        }
-    }
+    if (hash[0u] != 0u) { return false; }
+    let h1_be = bswap32(hash[1u]);
+    let h2_be = bswap32(hash[2u]);
+    if (h1_be < target[1u]) { return true; }
+    if (h1_be > target[1u]) { return false; }
+    if (h2_be < target[2u]) { return true; }
     return false;
 }
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let nonce = global_id.x;
-    
-    // Initialize K12 state from midstate
-    var state: array<u32, 25>;
-    for (var i = 0u; i < 25u; i = i + 1u) {
-        if (i < 16u) {
-            state[i] = midstate[i];
-        } else {
-            state[i] = 0u;
-        }
-    }
-    
-    // Add nonce to state
-    state[0u] ^= nonce;
-    state[1u] ^= global_id.y;
-    
-    // K12 padding
-    state[16u] ^= 0x07u; // K12 domain separator
-    state[24u] ^= 0x80000000u; // Final bit
-    
-    // Perform K12 permutation
-    keccak_p(&state);
-    
-    // Extract hash (first 8 words)
+    let nonce = nonce_offset[0u] + global_id.x;
+
+    // Initialize 1600-bit state to zero
+    var state: array<u32, 50>;
+    for (var i = 0u; i < 50u; i = i + 1u) { state[i] = 0u; }
+
+    // Absorb preimage (64 bytes = lanes 0-7, state[0..15])
+    for (var i = 0u; i < 16u; i = i + 1u) { state[i] = midstate[i]; }
+
+    // Absorb nonce (bytes 64-71 = lane 8)
+    state[16u] = nonce;       // lo of lane 8
+    state[17u] = global_id.y; // hi of lane 8 (0 for 1D dispatch)
+
+    // right_encode(0) = {0x00, 0x01} at bytes 72-73 (lane 9 lo)
+    // K12 domain separator 0x07 at byte 74 (lane 9 lo, bits 16-23)
+    // Combined: byte72=0x00(nop), byte73=0x01<<8, byte74=0x07<<16
+    state[18u] = 0x00070100u;
+
+    // Final padding bit: 0x80 at byte 167 (last byte of rate=168)
+    // byte 167 = lane 20 hi word, bits 24-31
+    state[41u] = 0x80000000u;
+
+    keccak_p12(&state);
+
+    // Extract 32-byte hash (first 4 lanes)
     var hash: array<u32, 8>;
-    for (var i = 0u; i < 8u; i = i + 1u) {
-        hash[i] = state[i];
-    }
-    
-    // Check if hash meets target
+    for (var i = 0u; i < 8u; i = i + 1u) { hash[i] = state[i]; }
+
     if (check_target(hash)) {
         let idx = atomicAdd(&results[0u].x, 1u);
         if (idx < 255u) {
-            results[idx + 1u] = vec4<u32>(nonce, hash[0u], hash[1u], hash[2u]);
+            results[idx + 1u] = vec4<u32>(nonce, hash[0u], hash[1u], 1u);
         }
     }
 }

@@ -76,9 +76,51 @@ export type TokenSummary = {
   mintedSupply: bigint;
 };
 
+// DAA parameter types per mode (V2_DMINT_DESIGN.md §3.5)
+export type DaaParamsFixed = Record<string, never>;
+
+export type DaaParamsEpoch = {
+  epochLength: number;    // Mints per adjustment epoch (default 2016)
+  maxAdjustment: number;  // Max adjustment factor per epoch (default 4.0)
+};
+
+export type DaaParamsAsert = {
+  targetTime: number;     // Target seconds between mints (default 60)
+  halfLife: number;       // Half-life in seconds (default 3600)
+};
+
+export type DaaParamsLwma = {
+  targetTime: number;     // Target seconds between mints (default 60)
+  windowSize: number;     // Number of recent mints to average (default 45)
+};
+
+export type DaaParamsSchedule = {
+  schedule: { h: number; d: number }[]; // Ordered [{height, difficulty}] breakpoints
+};
+
+export type DaaParams = DaaParamsFixed | DaaParamsEpoch | DaaParamsAsert | DaaParamsLwma | DaaParamsSchedule;
+
+export type DaaConfig = {
+  mode: number;           // DAA mode: 0x00=fixed, 0x01=epoch, 0x02=asert, 0x03=lwma, 0x04=schedule
+  params: DaaParams;
+};
+
+// Glyph v2 dMint payload structure (V2_DMINT_DESIGN.md §3.2)
+export type DmintPayloadV2 = {
+  algo: number;           // Algorithm ID: 0x00=sha256d, 0x01=blake3, 0x02=k12, 0x03=argon2light
+  maxHeight: number;      // Maximum mint count
+  reward: number;         // Photons per mint
+  premine?: number;       // Creator premine amount (default 0)
+  diff: number;           // Initial difficulty (target divisor)
+  daa?: DaaConfig;        // DAA configuration (default: fixed)
+};
+
 export type GlyphPayload = {
+  v?: number;             // Glyph version (2 for v2)
+  p?: number[];           // Protocol IDs
   in?: Uint8Array[];
   by?: Uint8Array[];
+  dmint?: DmintPayloadV2; // v2 dMint configuration
   [key: string]: unknown;
 };
 

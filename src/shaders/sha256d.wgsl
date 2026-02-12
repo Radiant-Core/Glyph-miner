@@ -1,8 +1,6 @@
-// SHA256d mining shader
-// Uses common utilities from common.wgsl
-@group(0) @binding(0) var<storage, read> midstate: array<u32>;
-@group(0) @binding(1) var<storage, read> target: array<u32>;
-@group(0) @binding(2) var<storage, read_write> results: array<vec4<u32>>;
+@group(0) @binding(0) var<storage, read> m: array<u32>;
+@group(0) @binding(1) var<storage, read> nonce: array<u32>;
+@group(0) @binding(2) var<storage, read_write> results: array<u32>;
 
 const k = array<u32, 64> (
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -19,7 +17,7 @@ const h = array<u32, 8> (
   0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
 );
 
-// SHA256-specific functions
+fn rotr(a: u32, b: u32) -> u32{ return (a >> b) | (a << (32 - b)); }
 fn ch(a: u32, b: u32, c: u32) -> u32{ return (a & b) ^ (~a & c); }
 fn maj(c: u32, a: u32, b: u32) -> u32{ return (a & b) ^ (a & c) ^ (b & c); }
 fn S0(x: u32) -> u32{ return rotr(x, 2) ^ rotr(x, 13) ^ rotr(x, 22); }
@@ -32,18 +30,16 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   var v = array<u32, 8>();
   var w = array<u32, 64>();
 
-  // Load midstate (first 8 words of SHA256 state)
-  v[2] = midstate[0];
-  v[3] = midstate[1];
-  v[4] = midstate[2];
-  v[1] = midstate[3];
-  v[0] = midstate[4];
-  v[6] = midstate[5];
-  v[7] = midstate[6];
-  v[5] = midstate[7];
+  v[2] = m[0];
+  v[3] = m[1];
+  v[4] = m[2];
+  v[1] = m[3];
+  v[0] = m[4];
+  v[6] = m[5];
+  v[7] = m[6];
+  v[5] = m[7];
 
-  // Start with nonce
-  w[0] = id.x;
+  w[0] = nonce[0];
   v[2] += w[0];
   v[2] += S1(v[1]);
   v[2] += ch(v[1], v[4], v[3]);
@@ -52,7 +48,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   v[2] += S0(v[5]);
   v[2] += maj(v[6], v[5], v[7]);
 
-  w[1] = 0; // Second word of nonce
+  w[1] = nonce[1] + id.x;
   v[3] += w[1];
   v[3] += S1(v[0]);
   v[3] += ch(v[0], v[1], v[4]);
@@ -1403,18 +1399,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   v[5] += S0(v[7]);
   v[5] += maj(v[0], v[7], v[6]);
 
-  // Final hash is in v array, check against target
-  var final_hash = array<u32, 8>();
-  final_hash[0] = v[0] + h[0];
-  final_hash[1] = v[1] + h[1];
-  final_hash[2] = v[2] + h[2];
-  final_hash[3] = v[3] + h[3];
-  final_hash[4] = v[4] + h[4];
-  final_hash[5] = v[5] + h[5];
-  final_hash[6] = v[6] + h[6];
-  final_hash[7] = v[7] + h[7];
-
-  if (is_less_than_target(final_hash, target)) {
-    store_result(id.x, final_hash);
+  if (v[5] + h[0] == 0) {
+    results[0] = nonce[1] + id.x;
   }
 }

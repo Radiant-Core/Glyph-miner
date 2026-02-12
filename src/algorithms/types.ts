@@ -86,9 +86,23 @@ export const REFERENCE_HASHRATES: Record<AlgorithmId, number> = {
 
 // Calculate estimated time to mine
 export function calcTimeToMine(difficulty: number, algorithm: AlgorithmId, hashrate?: number): number {
+  // Guard against division by zero
+  if (difficulty <= 0) {
+    return Infinity;
+  }
+  
   const refHashrate = hashrate || REFERENCE_HASHRATES[algorithm];
+  if (refHashrate <= 0) {
+    return Infinity;
+  }
+  
   const maxTarget = 0x7fffffffffffffffn; // From pow.ts
   const target = maxTarget / BigInt(difficulty);
+  
+  // Guard against target being zero (shouldn't happen with valid difficulty)
+  if (target === 0n) {
+    return Infinity;
+  }
   
   // 33 bits (4 bytes + 1 bit to make the next 64 bit number unsigned)
   return Math.round(

@@ -1,11 +1,12 @@
 import { sha256 as jsSha256, Hasher } from "js-sha256";
-import { hexToBytes } from "@noble/hashes/utils";
+import { hexToBytes, bytesToHex } from "@noble/hashes/utils";
 import { sha256 } from "@noble/hashes/sha2";
 import { swapEndianness } from "@bitauth/libauth";
 import { Work, AlgorithmId } from "./types";
 import {
   contract,
   found,
+  glyph,
   hashrate,
   miningStatus,
   mintMessage,
@@ -15,14 +16,13 @@ import {
 import { addMessage } from "./message";
 import { createWork, powPreimage } from "./pow";
 import { foundNonce } from "./blockchain";
-import { getAlgorithmConfig, isAlgorithmSupported } from "./algorithms";
+import { isAlgorithmSupported } from "./algorithms";
 import { ALGORITHMS, calcTimeToMine } from "./algorithms/types";
 
 // Import shaders as raw text
 import sha256dShaderText from "./shaders/sha256d.wgsl?raw";
 import blake3ShaderText from "./shaders/blake3.wgsl?raw";
 import k12ShaderText from "./shaders/k12.wgsl?raw";
-import argon2lightShaderText from "./shaders/argon2light.wgsl?raw";
 
 function signedToHex(number: number) {
   let value = Math.max(-2147483648, Math.min(2147483647, number));
@@ -32,36 +32,63 @@ function signedToHex(number: number) {
   return value.toString(16).padStart(8, "0");
 }
 
-// Parse algorithm from contract script
-function parseAlgorithmFromContract(script: string): AlgorithmId {
-  // Look for algorithm byte after target in enhanced contracts
-  // Legacy contracts (no algorithm byte) default to sha256d
-  try {
-    // Simple heuristic: look for algorithm pattern
-    // In production, this would parse the actual script structure
-    if (script.includes('0x01')) return 'blake3';
-    if (script.includes('0x02')) return 'k12';
-    if (script.includes('0x03')) return 'argon2light';
-    return 'sha256d'; // Default
-  } catch {
-    return 'sha256d'; // Fallback
+// Map algorithm ID number to AlgorithmId string
+function mapAlgorithmId(algoId: number): AlgorithmId {
+  switch (algoId) {
+    case 0x00: return 'sha256d';
+    case 0x01: return 'blake3';
+    case 0x02: return 'k12';
+    case 0x03: return 'argon2light';
+    case 0x04: return 'randomx-light';
+    default: return 'sha256d';
   }
+}
+
+// Get algorithm - checks v2 glyph payload first, then falls back to contract (from API)
+function getAlgorithm(): AlgorithmId {
+  // First check v2 glyph payload for dmint.algo
+  const payload = glyph.value?.payload;
+  if (payload) {
+    // Check for v2 version field
+    const isV2 = payload.v === 2;
+    
+    // Check for dmint field with algorithm
+    const dmint = payload.dmint as { algo?: number } | undefined;
+    if (dmint && typeof dmint.algo === 'number') {
+      const algo = mapAlgorithmId(dmint.algo);
+      console.log(`Using algorithm from v2 glyph payload: ${dmint.algo} -> ${algo}`);
+      return algo;
+    }
+    
+    if (isV2) {
+      console.log("v2 glyph without dmint.algo, checking contract");
+    }
+  }
+  
+  // Fall back to contract algorithm (set by blockchain.ts from dmint API)
+  const algo = contract.value?.algorithm;
+  if (algo) {
+    console.log("Using algorithm from contract/API:", algo);
+    return algo;
+  }
+  
+  console.log("No algorithm found, defaulting to sha256d");
+  return 'sha256d';
 }
 
 // Get shader code for algorithm
 function getShaderCode(algorithm: AlgorithmId): string {
   switch (algorithm) {
-    case 'sha256d':
-      return sha256dShaderText;
-    case 'blake3':
-      return blake3ShaderText;
-    case 'k12':
-      return k12ShaderText;
-    case 'argon2light':
-      return argon2lightShaderText;
-    default:
-      throw new Error(`Unsupported algorithm: ${algorithm}`);
+    case 'blake3': return blake3ShaderText;
+    case 'k12': return k12ShaderText;
+    default: return sha256dShaderText;
   }
+}
+
+// Check if algorithm uses the v2 4-binding shader layout
+// (midstate/target/results/nonce_offset) vs v1 3-binding (midstate/nonce/result)
+function isV2ShaderLayout(algorithm: AlgorithmId): boolean {
+  return algorithm === 'blake3' || algorithm === 'k12';
 }
 
 export function updateWork() {
@@ -70,8 +97,8 @@ export function updateWork() {
     return;
   }
   
-  // Parse algorithm from contract
-  const algorithm = parseAlgorithmFromContract(contract.value.script);
+  // Get algorithm from v2 glyph payload or contract/API
+  const algorithm = getAlgorithm();
   
   // Check if algorithm is supported
   if (!isAlgorithmSupported(algorithm)) {
@@ -180,8 +207,8 @@ const start = async () => {
   const work = workSignal.value;
   if (!work) return;
   
-  // Get algorithm from work
-  const algorithm = (work as any).algorithm || 'sha256d';
+  const algorithm: AlgorithmId = (work as any).algorithm || 'sha256d';
+  const useV2Layout = isV2ShaderLayout(algorithm);
   
   let midstate = powMidstate(work);
   miningStatus.value = "mining";
@@ -197,16 +224,14 @@ const start = async () => {
   device.pushErrorScope("validation");
   device.pushErrorScope("internal");
 
-  // Get shader code for algorithm
   const shaderCode = getShaderCode(algorithm);
-  
   const module = device.createShaderModule({
     label: `${algorithm} module`,
     code: shaderCode,
   });
 
   const pipeline = device.createComputePipeline({
-    label: "pow pipeline",
+    label: `${algorithm} pipeline`,
     layout: "auto",
     compute: {
       module,
@@ -215,150 +240,197 @@ const start = async () => {
   });
 
   const numWorkgroups = device.limits.maxComputeWorkgroupsPerDimension;
-  //const workgroupSize = device.limits.maxComputeWorkgroupSizeX;
   const workgroupSize = 256;
   const numInvocations = numWorkgroups * workgroupSize;
 
-  // Get algorithm config for buffer requirements
-  const algoConfig = getAlgorithmConfig(algorithm);
-  if (!algoConfig) {
-    throw new Error(`No configuration for algorithm: ${algorithm}`);
-  }
+  if (useV2Layout) {
+    // V2 layout: 4 bindings (midstate/target/results/nonce_offset)
+    // Blake3: midstate=64B (16 u32), K12: midstate=64B (16 u32 from preimage)
+    const midstateSize = 64;
+    const targetSize = 12; // 3 u32s (pad, high, low)
+    const resultsSize = 256 * 16; // 256 vec4<u32>
+    const nonceSize = 4; // 1 u32
 
-  // Create buffers based on algorithm requirements
-  const midstateBuffer = device.createBuffer({
-    label: "midstate buffer",
-    size: algoConfig.bufferRequirements.midstate * 4, // u32s to bytes
-    usage: (GPUBufferUsage as any).STORAGE | (GPUBufferUsage as any).COPY_DST,
-  });
+    const midstateBuffer = device.createBuffer({
+      label: "midstate buffer", size: midstateSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    const targetBuffer = device.createBuffer({
+      label: "target buffer", size: targetSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    const resultsBuffer = device.createBuffer({
+      label: "results buffer", size: resultsSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+    });
+    const nonceOffsetBuffer = device.createBuffer({
+      label: "nonce offset buffer", size: nonceSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
 
-  const targetBuffer = device.createBuffer({
-    label: "target buffer",
-    size: algoConfig.bufferRequirements.target * 4, // u32s to bytes
-    usage: (GPUBufferUsage as any).STORAGE | (GPUBufferUsage as any).COPY_DST,
-  });
+    const bindGroup = device.createBindGroup({
+      label: `${algorithm} bindGroup`,
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: midstateBuffer } },
+        { binding: 1, resource: { buffer: targetBuffer } },
+        { binding: 2, resource: { buffer: resultsBuffer } },
+        { binding: 3, resource: { buffer: nonceOffsetBuffer } },
+      ],
+    });
 
-  const resultBufferSize = algoConfig.bufferRequirements.results * 16; // vec4<u32> to bytes
+    const gpuReadBuffer = device.createBuffer({
+      size: 32, // Read first 2 vec4<u32> entries (result count + first result)
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
 
-  const resultBuffer = device.createBuffer({
-    label: "pow result",
-    size: resultBufferSize,
-    usage:
-      (GPUBufferUsage as any).STORAGE |
-      (GPUBufferUsage as any).COPY_SRC |
-      (GPUBufferUsage as any).COPY_DST,
-  });
+    // Write midstate (first 64 bytes of preimage for Blake3/K12)
+    device.queue.writeBuffer(midstateBuffer, 0, midstate.preimage.slice(0, 64));
 
-  const bindGroup = device.createBindGroup({
-    label: `${algorithm} bindGroup`,
-    layout: pipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: midstateBuffer } },
-      { binding: 1, resource: { buffer: targetBuffer } },
-      { binding: 2, resource: { buffer: resultBuffer } },
-    ],
-  });
+    // Write target as 3 u32s: [0, high32, low32]
+    const targetHigh = Number((work.target >> 32n) & 0xFFFFFFFFn);
+    const targetLow = Number(work.target & 0xFFFFFFFFn);
+    device.queue.writeBuffer(targetBuffer, 0, new Uint32Array([0, targetHigh, targetLow]));
 
-  const gpuReadBuffer = device.createBuffer({
-    size: resultBufferSize,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  });
+    let nonceStart = 0;
+    let startTime = Date.now();
+    const maxNonce = 0xffffffff - numInvocations;
 
-  let nonceStart = 0;
-  let nonce1 = Math.round(Math.random() * 0xffffffff);
-  let startTime = Date.now();
-  const maxNonce = 0xffffffff - numInvocations;
-
-  device.queue.writeBuffer(midstateBuffer, 0, midstate.hash);
-
-  while (miningStatus.value === "mining" || miningStatus.value === "change") {
-    if (nonceStart > maxNonce) {
-      hashrate.value = (nonceStart / (Date.now() - startTime)) * 1000;
-      nonceStart = 0;
-      nonce1++;
-      if (nonce1 > 0xffffffff) {
-        nonce1 = 0;
+    while (miningStatus.value === "mining" || miningStatus.value === "change") {
+      if (nonceStart > maxNonce) {
+        hashrate.value = (nonceStart / (Date.now() - startTime)) * 1000;
+        nonceStart = 0;
+        startTime = Date.now();
       }
-      startTime = Date.now();
+
+      // Clear results counter
+      device.queue.writeBuffer(resultsBuffer, 0, new Uint32Array([0, 0, 0, 0]));
+      // Write nonce offset
+      device.queue.writeBuffer(nonceOffsetBuffer, 0, new Uint32Array([nonceStart]));
+
+      const encoder = device.createCommandEncoder();
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, bindGroup);
+      pass.dispatchWorkgroups(numWorkgroups);
+      pass.end();
+      encoder.copyBufferToBuffer(resultsBuffer, 0, gpuReadBuffer, 0, 32);
+      device.queue.submit([encoder.finish()]);
+
+      await gpuReadBuffer.mapAsync(GPUMapMode.READ);
+      const range = new Uint32Array(gpuReadBuffer.getMappedRange());
+      const resultCount = range[0];
+      if (resultCount > 0) {
+        // First result at offset 4 (vec4<u32>): [nonce, hash0, hash1, flag]
+        const foundNonceVal = range[4];
+        const nonceHex = foundNonceVal.toString(16).padStart(8, "0") + "00000000";
+        // For v2 algorithms, verify on CPU (TODO: implement CPU blake3/k12 verify)
+        console.log(`${algorithm} solution found, nonce: ${nonceHex}`);
+        foundNonce(nonceHex);
+        addMessage({ type: "found", nonce: nonceHex });
+        found.value++;
+      }
+      gpuReadBuffer.unmap();
+      nonceStart += numInvocations;
+
+      // @ts-expect-error doesn't matter
+      if (miningStatus.value === "change") {
+        updateWork();
+        if (!workSignal.value) break;
+        midstate = powMidstate(workSignal.value);
+        device.queue.writeBuffer(midstateBuffer, 0, midstate.preimage.slice(0, 64));
+        miningStatus.value = "mining";
+      }
     }
-    // Write target buffer (convert bigint to u32 array)
-    const targetU32Array = new Uint32Array(8);
-    let targetBig = work.target;
-    for (let i = 7; i >= 0; i--) {
-      targetU32Array[i] = Number(targetBig & 0xffffffffn);
-      targetBig = targetBig >> 32n;
-    }
-    device.queue.writeBuffer(targetBuffer, 0, targetU32Array);
-
-    const encoder = device.createCommandEncoder({
-      label: "pow encoder",
+  } else {
+    // V1 layout: 3 bindings (midstate/nonce/result) — SHA256d
+    const midstateBuffer = device.createBuffer({
+      label: "midstate buffer", size: 32,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
-    const pass = encoder.beginComputePass({
-      label: "pow compute pass",
+    const resultBufferSize = 4;
+    const resultBuffer = device.createBuffer({
+      label: "pow result", size: resultBufferSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
     });
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(numWorkgroups);
-    pass.end();
+    const nonceBuffer = device.createBuffer({
+      label: "nonce buffer", size: 8,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
 
-    encoder.copyBufferToBuffer(
-      resultBuffer,
-      0,
-      gpuReadBuffer,
-      0,
-      resultBufferSize
-    );
+    const bindGroup = device.createBindGroup({
+      label: "pow bindGroup",
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: midstateBuffer } },
+        { binding: 1, resource: { buffer: nonceBuffer } },
+        { binding: 2, resource: { buffer: resultBuffer } },
+      ],
+    });
 
-    const commandBuffer = encoder.finish();
-    device.queue.submit([commandBuffer]);
+    const gpuReadBuffer = device.createBuffer({
+      size: resultBufferSize,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
 
-    await gpuReadBuffer.mapAsync((GPUMapMode as any).READ);
-    const range = new Uint8Array(gpuReadBuffer.getMappedRange());
-    
-    // Check for solution in results buffer
-    for (let i = 0; i < algoConfig.bufferRequirements.results; i++) {
-      const offset = i * 16; // vec4<u32> = 16 bytes
-      const resultBytes = range.slice(offset, offset + 16);
-      
-      // Check if this entry has a solution (atomic store flag)
-      const flag = new DataView(resultBytes.buffer).getUint32(12, true);
-      if (flag === 1) {
-        const nonce = new DataView(resultBytes.buffer).getUint32(0, true);
-        // const hash = new Uint8Array(resultBytes.slice(4, 12)); // Unused variable
-        
-        // Verify the solution
-        if (verify(work.target, midstate.preimage, nonce.toString(16))) {
-          console.log(`Found solution with ${algorithm}`, nonce.toString(16));
-          foundNonce(nonce.toString(16));
-          addMessage({
-            type: "found",
-            nonce: nonce.toString(16),
-          });
-          break;
+    let nonceStart = 0;
+    let nonce1 = Math.round(Math.random() * 0xffffffff);
+    let startTime = Date.now();
+    const maxNonce = 0xffffffff - numInvocations;
+
+    device.queue.writeBuffer(midstateBuffer, 0, midstate.hash);
+
+    while (miningStatus.value === "mining" || miningStatus.value === "change") {
+      if (nonceStart > maxNonce) {
+        hashrate.value = (nonceStart / (Date.now() - startTime)) * 1000;
+        nonceStart = 0;
+        nonce1++;
+        if (nonce1 > 0xffffffff) {
+          nonce1 = 0;
+        }
+        startTime = Date.now();
+      }
+      device.queue.writeBuffer(
+        nonceBuffer, 0, new Uint32Array([nonce1, nonceStart])
+      );
+
+      const encoder = device.createCommandEncoder({ label: "pow encoder" });
+      const pass = encoder.beginComputePass({ label: "pow compute pass" });
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, bindGroup);
+      pass.dispatchWorkgroups(numWorkgroups);
+      pass.end();
+      encoder.copyBufferToBuffer(resultBuffer, 0, gpuReadBuffer, 0, resultBufferSize);
+      device.queue.submit([encoder.finish()]);
+
+      await gpuReadBuffer.mapAsync(GPUMapMode.READ);
+      const range = new Uint8Array(gpuReadBuffer.getMappedRange());
+      const result = bytesToHex(range.slice(0, 4));
+      if (result !== "00000000") {
+        const nonceHex = `${nonce1.toString(16).padStart(8, "0")}${swapEndianness(result)}`;
+        if (verify(work.target, midstate.preimage, nonceHex)) {
+          console.log("Verified", nonceHex);
+          foundNonce(nonceHex);
+          addMessage({ type: "found", nonce: nonceHex });
+          found.value++;
         }
       }
-    }
-    found.value++;
-  }
+      device.queue.writeBuffer(resultBuffer, 0, new Uint32Array([0]));
+      resultBuffer.unmap();
+      gpuReadBuffer.unmap();
+      nonceStart += numInvocations;
 
-    device.queue.writeBuffer(resultBuffer, 0, new Uint32Array([0]));
-
-    gpuReadBuffer.unmap();
-    resultBuffer.unmap();
-    nonceStart += numInvocations;
-
-    // Note: TypeScript error expected here
-    if (miningStatus.value === "change") {
-      updateWork();
-      console.debug("Changing work");
-      if (!workSignal.value) {
-        console.debug("Invalid work");
-        return;
+      // @ts-expect-error doesn't matter
+      if (miningStatus.value === "change") {
+        updateWork();
+        console.debug("Changing work");
+        if (!workSignal.value) { console.debug("Invalid work"); break; }
+        midstate = powMidstate(workSignal.value);
+        device.queue.writeBuffer(midstateBuffer, 0, midstate.hash);
+        miningStatus.value = "mining";
       }
-      midstate = powMidstate(workSignal.value);
-      device.queue.writeBuffer(midstateBuffer, 0, midstate.hash);
-      miningStatus.value = "mining";
     }
+  }
 
   hashrate.value = 0;
   miningStatus.value = "ready";

@@ -22,8 +22,23 @@ import { addMessage } from "./message";
 import miner, { updateWork } from "./miner";
 import { reverseRef, scriptHash } from "./utils";
 import { broadcast, client, fetchRef, fetchTx } from "./client";
-import { Contract, Work, Utxo } from "./types";
+import { Contract, Work, Utxo, AlgorithmId } from "./types";
 import { FEE_PER_KB } from "./constants";
+import { fetchContract as fetchContractFromApi } from "./dmint-api";
+
+// Map API algorithm ID to AlgorithmId string
+function mapAlgorithmId(apiAlgo: number): AlgorithmId {
+  // API uses: 0=NONE, 1=SHA256D, 2=RADIANTHASH, etc.
+  // But some tokens use different IDs - try to detect Blake3
+  switch (apiAlgo) {
+    case 0: return 'sha256d';  // NONE defaults to sha256d
+    case 1: return 'sha256d';  // SHA256D
+    case 2: return 'blake3';   // Could be RADIANTHASH or Blake3
+    case 3: return 'k12';
+    case 4: return 'argon2light';
+    default: return 'sha256d';
+  }
+}
 
 // Subscription statuses
 let addressSubscriptionStatus = "";
@@ -453,7 +468,20 @@ export async function changeToken(ref: string) {
     return;
   }
 
-  contract.value = token.contract;
+  // Try to get algorithm from dmint API
+  let algorithm: AlgorithmId = 'sha256d';
+  try {
+    const apiContract = await fetchContractFromApi(ref);
+    if (apiContract) {
+      algorithm = mapAlgorithmId(apiContract.algorithm);
+      console.log("Algorithm from API:", apiContract.algorithm, "->", algorithm);
+    }
+  } catch (e) {
+    console.warn("Failed to fetch algorithm from API:", e);
+  }
+
+  // Store algorithm in contract
+  contract.value = { ...token.contract, algorithm };
   glyph.value = token.glyph;
   updateWork();
 

@@ -2,6 +2,8 @@
 
 Glyph Miner is a multi-algorithm cryptocurrency miner for tokens that follow the Glyphs Protocol, using layer 1 mining contracts.
 
+> **V2 Hard Fork (Radiant Core 2.1, Block 410,000):** After activation, Blake3 and KangarooTwelve dMint tokens are validated **entirely on-chain** via OP_BLAKE3 and OP_K12 consensus opcodes. No indexer trust required — all proof-of-work is verified at the script level.
+
 ## Mining Options
 
 ### 🌐 Browser Extension (Recommended for GPU Mining)

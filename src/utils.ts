@@ -66,12 +66,21 @@ export function opcodeToNum(n: string) {
     return BigInt(num);
   }
 
-  const num = vmNumberToBigInt(hexToBytes(n), {
-    requireMinimalEncoding: false,
-  });
+  // Validate hex string: must have even length and contain only hex characters
+  if (n.length === 0 || n.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(n)) {
+    return false;
+  }
 
-  if (typeof num === "bigint") {
-    return num;
+  try {
+    const num = vmNumberToBigInt(hexToBytes(n), {
+      requireMinimalEncoding: false,
+    });
+
+    if (typeof num === "bigint") {
+      return num;
+    }
+  } catch {
+    return false;
   }
 
   return false;
