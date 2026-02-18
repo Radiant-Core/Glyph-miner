@@ -11,7 +11,7 @@
 ### How to Report
 
 1. **Do NOT** create a public GitHub issue for security vulnerabilities
-2. Email security concerns to the maintainers
+2. Email: info@radiantfoundation.org
 3. Include:
    - Description of the vulnerability
    - Steps to reproduce
