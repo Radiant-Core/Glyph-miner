@@ -1,6 +1,6 @@
 // KangarooTwelve (K12) mining shader — correct 64-bit Keccak-p[1600,12]
 // State: 25 lanes x 64 bits = 50 u32s. Lane i = (state[2i], state[2i+1]) = (lo, hi)
-// Mining: K12(preimage(64B) || nonce(4B+pad)) with right_encode(0) framing
+// Mining: K12(preimage(64B) || nonce(4B+pad)) with length_encode(0)={0x00} framing
 
 @group(0) @binding(0) var<storage, read> midstate: array<u32>;
 @group(0) @binding(1) var<storage, read> target: array<u32>;
@@ -135,10 +135,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     state[16u] = nonce;       // lo of lane 8
     state[17u] = global_id.y; // hi of lane 8 (0 for 1D dispatch)
 
-    // right_encode(0) = {0x00, 0x01} at bytes 72-73 (lane 9 lo)
-    // K12 domain separator 0x07 at byte 74 (lane 9 lo, bits 16-23)
-    // Combined: byte72=0x00(nop), byte73=0x01<<8, byte74=0x07<<16
-    state[18u] = 0x00070100u;
+    // K12 framing: length_encode(0) = {0x00} (1 byte, NOT {0x00,0x01})
+    // K12 spec: K12(M,"") = TurboSHAKE128(M || 0x00 || 0x07, 0x07)
+    // byte72=0x00 (length_encode(0)), byte73=0x07 (K12 domain separator)
+    // Combined into lane 9 lo word (little-endian): 0x00000700u
+    state[18u] = 0x00000700u;
 
     // Final padding bit: 0x80 at byte 167 (last byte of rate=168)
     // byte 167 = lane 20 hi word, bits 24-31
