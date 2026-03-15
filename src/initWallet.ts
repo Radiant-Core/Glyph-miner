@@ -13,8 +13,12 @@ import { createWallet, openWallet } from "./wallet";
 
 const defaultServers = [
   //"wss://electrumx-testnet.radiant4people.com:53002",
+  "wss://radiantus.bladenet.online:50022",
   "wss://electrumx.radiant4people.com:50022",
+  "wss://radiant2.bladenet.online:50022",
+  "wss://radiant4.bladenet.online:50022",
   "wss://electrumx2.radiant4people.com:50022",
+  "wss://radiantcore.org:50004",
 ];
 
 console.debug("Init wallet");
