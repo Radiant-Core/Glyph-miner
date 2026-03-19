@@ -52,7 +52,10 @@ function fmtDiff(d: number): string {
 }
 
 /**
- * Build a data: URL from hex icon data and MIME type.
+ * Build a blob URL from hex-encoded icon data and MIME type.
+ * This mirrors how Photonic Wallet decodes embedded icons:
+ *   const blob = new Blob([embed.b], { type: embed.t });
+ * Except the API returns hex-encoded bytes, so we decode first.
  */
 function iconDataUrl(iconType?: string, iconData?: string): string | undefined {
   if (!iconType || !iconData) return undefined;
@@ -67,6 +70,18 @@ function iconDataUrl(iconType?: string, iconData?: string): string | undefined {
   }
 }
 
+/**
+ * Resolve IPFS URLs to a public gateway, similar to Photonic Wallet's useIpfsUrl.
+ */
+function resolveIconUrl(url?: string): string | undefined {
+  if (!url) return undefined;
+  if (url.startsWith("ipfs://")) {
+    const cid = url.replace("ipfs://", "");
+    return `https://ipfs.io/ipfs/${cid}`;
+  }
+  return url;
+}
+
 function TokenIcon({ iconType, iconData, iconUrl }: {
   iconType?: string; iconData?: string; iconUrl?: string;
 }) {
@@ -78,7 +93,7 @@ function TokenIcon({ iconType, iconData, iconUrl }: {
     return () => { if (u) URL.revokeObjectURL(u); };
   }, [iconType, iconData]);
 
-  const src = blobUrl || iconUrl;
+  const src = blobUrl || resolveIconUrl(iconUrl);
   if (src) {
     return (
       <Image
