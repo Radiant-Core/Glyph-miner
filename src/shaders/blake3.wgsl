@@ -3,7 +3,7 @@
 
 @group(0) @binding(0) var<storage, read> midstate: array<u32>;
 @group(0) @binding(1) var<storage, read> target: array<u32>;
-@group(0) @binding(2) var<storage, read_write> results: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read_write> results: array<atomic<u32>>;
 @group(0) @binding(3) var<storage, read> nonce_offset: array<u32>;
 
 // Blake3 IV constants
@@ -170,11 +170,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     
     // Check if hash meets target
     if (check_target(hash)) {
-        let idx = atomicAdd(&results[0u].x, 1u);
+        // results[0] is the atomic result counter
+        // results[4..7], results[8..11], ... store per-result data
+        let idx = atomicAdd(&results[0], 1u);
         if (idx < 255u) {
-            // Store nonce, hash words, and flag=1 at w component (offset 12)
-            // CPU expects: offset 0=nonce, offset 12=flag(1)
-            results[idx + 1u] = vec4<u32>(nonce, hash[0u], hash[1u], 1u);
+            let base = (idx + 1u) * 4u;
+            atomicStore(&results[base], nonce);
+            atomicStore(&results[base + 1u], hash[0u]);
+            atomicStore(&results[base + 2u], hash[1u]);
+            atomicStore(&results[base + 3u], 1u);
         }
     }
 }

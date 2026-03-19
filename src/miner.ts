@@ -1,6 +1,7 @@
 import { sha256 as jsSha256, Hasher } from "js-sha256";
 import { hexToBytes, bytesToHex } from "@noble/hashes/utils";
 import { sha256 } from "@noble/hashes/sha2";
+import { blake3 } from "@noble/hashes/blake3";
 import { swapEndianness } from "@bitauth/libauth";
 import { Work, AlgorithmId } from "./types";
 import {
@@ -124,7 +125,7 @@ export function updateWork() {
   addMessage({ type: "general", msg: `Using ${algoInfo.name} algorithm` });
   
   // Show collision warning if applicable
-  const timeToMine = calcTimeToMine(Number(contract.value.target), algorithm);
+  const timeToMine = calcTimeToMine(Number(contract.value.target), algorithm, hashrate.value || undefined);
   if (timeToMine < 30) {
     addMessage({ type: "general", msg: `Warning: Fast expected solve time (${timeToMine}s) may cause collisions` });
   }
@@ -179,6 +180,24 @@ function verify(target: bigint, partialPreimage: Uint8Array, nonce: string) {
   return num < target;
 }
 
+function verifyBlake3(target: bigint, partialPreimage: Uint8Array, nonce: string) {
+  const preimage = new Uint8Array(partialPreimage.byteLength + 8);
+  preimage.set(partialPreimage);
+  preimage.set(hexToBytes(nonce), 64);
+
+  const hash = blake3(preimage);
+
+  // First four bytes must always be zero
+  if (hash[0] !== 0 || hash[1] !== 0 || hash[2] !== 0 || hash[3] !== 0) {
+    return false;
+  }
+
+  // Check next 8 bytes against target
+  const view = new DataView(hash.slice(4, 12).buffer, 0);
+  const num = view.getBigUint64(0, false);
+  return num < target;
+}
+
 async function stop() {
   console.debug("miner.stop called");
   if (miningStatus.value !== "ready") {
@@ -220,9 +239,6 @@ const start = async () => {
   if (!device) {
     throw new Error("No GPU device found.");
   }
-
-  device.pushErrorScope("validation");
-  device.pushErrorScope("internal");
 
   const shaderCode = getShaderCode(algorithm);
   const module = device.createShaderModule({
@@ -321,14 +337,20 @@ const start = async () => {
       const range = new Uint32Array(gpuReadBuffer.getMappedRange());
       const resultCount = range[0];
       if (resultCount > 0) {
-        // First result at offset 4 (vec4<u32>): [nonce, hash0, hash1, flag]
+        // First result at flat offset 4: [nonce, hash0, hash1, flag]
         const foundNonceVal = range[4];
-        const nonceHex = foundNonceVal.toString(16).padStart(8, "0") + "00000000";
-        // For v2 algorithms, verify on CPU (TODO: implement CPU blake3/k12 verify)
-        console.log(`${algorithm} solution found, nonce: ${nonceHex}`);
-        foundNonce(nonceHex);
-        addMessage({ type: "found", nonce: nonceHex });
-        found.value++;
+        // GPU stores nonce as LE u32 — convert to LE hex bytes for CPU verify & on-chain claim
+        const nonceHex = swapEndianness(foundNonceVal.toString(16).padStart(8, "0")) + "00000000";
+        // CPU-side verification before submitting
+        const verifyFn = algorithm === 'blake3' ? verifyBlake3 : verify;
+        if (verifyFn(work.target, midstate.preimage, nonceHex)) {
+          console.log(`${algorithm} solution verified, nonce: ${nonceHex}`);
+          foundNonce(nonceHex);
+          addMessage({ type: "found", nonce: nonceHex });
+          found.value++;
+        } else {
+          console.warn(`${algorithm} GPU found nonce ${nonceHex} but CPU verification failed`);
+        }
       }
       gpuReadBuffer.unmap();
       nonceStart += numInvocations;

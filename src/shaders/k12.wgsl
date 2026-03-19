@@ -4,7 +4,7 @@
 
 @group(0) @binding(0) var<storage, read> midstate: array<u32>;
 @group(0) @binding(1) var<storage, read> target: array<u32>;
-@group(0) @binding(2) var<storage, read_write> results: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read_write> results: array<atomic<u32>>;
 @group(0) @binding(3) var<storage, read> nonce_offset: array<u32>;
 
 // 64-bit left rotation via u32 pair
@@ -152,9 +152,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     for (var i = 0u; i < 8u; i = i + 1u) { hash[i] = state[i]; }
 
     if (check_target(hash)) {
-        let idx = atomicAdd(&results[0u].x, 1u);
+        let idx = atomicAdd(&results[0], 1u);
         if (idx < 255u) {
-            results[idx + 1u] = vec4<u32>(nonce, hash[0u], hash[1u], 1u);
+            let base = (idx + 1u) * 4u;
+            atomicStore(&results[base], nonce);
+            atomicStore(&results[base + 1u], hash[0u]);
+            atomicStore(&results[base + 2u], hash[1u]);
+            atomicStore(&results[base + 3u], 1u);
         }
     }
 }
