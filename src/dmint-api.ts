@@ -24,6 +24,7 @@ export interface ExtendedContract {
   daa_mode_name?: string;
   icon_type?: string;
   icon_data?: string;
+  icon_url?: string;
   total_supply?: number;
   mined_supply?: number;
 }

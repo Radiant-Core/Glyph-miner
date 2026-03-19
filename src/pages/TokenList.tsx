@@ -67,21 +67,22 @@ function iconDataUrl(iconType?: string, iconData?: string): string | undefined {
   }
 }
 
-function TokenIcon({ iconType, iconData, ticker }: {
-  iconType?: string; iconData?: string; ticker: string;
+function TokenIcon({ iconType, iconData, iconUrl }: {
+  iconType?: string; iconData?: string; iconUrl?: string;
 }) {
-  const [url, setUrl] = useState<string | undefined>();
+  const [blobUrl, setBlobUrl] = useState<string | undefined>();
 
   useEffect(() => {
     const u = iconDataUrl(iconType, iconData);
-    setUrl(u);
+    setBlobUrl(u);
     return () => { if (u) URL.revokeObjectURL(u); };
   }, [iconType, iconData]);
 
-  if (url) {
+  const src = blobUrl || iconUrl;
+  if (src) {
     return (
       <Image
-        src={url}
+        src={src}
         boxSize="24px"
         borderRadius="full"
         objectFit="cover"
@@ -101,8 +102,7 @@ function SummaryRow({ item }: { item: ContractSummaryItem }) {
     try {
       // Derive sub-contract refs from token ref (big-endian 72-char format)
       // changeToken and fetchToken both expect big-endian refs
-      const firstSubRef = deriveSubContractRef(item.ref, 0);
-      const numToTry = Math.min(item.outputs || 1, 32);
+      const numToTry = Math.min(item.outputs || 1, 64);
       let loaded = false;
 
       for (let i = 0; i < numToTry; i++) {
@@ -121,9 +121,9 @@ function SummaryRow({ item }: { item: ContractSummaryItem }) {
       }
 
       if (!loaded) {
-        // Fallback: load first sub-contract directly
-        selectedContract.value = firstSubRef;
-        changeToken(firstSubRef);
+        addMessage({ type: "general", msg: `All sub-contracts for ${item.ticker} are fully mined` });
+        setLoading(false);
+        return;
       }
 
       if (miningStatus.value !== "ready") addMessage({ type: "stop" });
@@ -146,7 +146,7 @@ function SummaryRow({ item }: { item: ContractSummaryItem }) {
     >
       <Td>
         <Flex gap={2} alignItems="center">
-          <TokenIcon iconType={item.iconType} iconData={item.iconData} ticker={item.ticker} />
+          <TokenIcon iconType={item.iconType} iconData={item.iconData} iconUrl={item.iconUrl} />
           <Text fontWeight="medium">{item.ticker.substring(0, 20)}</Text>
         </Flex>
       </Td>

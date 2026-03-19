@@ -34,9 +34,18 @@ contractsUrl.value =
 useIndexerApi.value = localStorage.getItem("useIndexerApi") !== "";
 
 // If servers isn't saved then set to default servers, randomly sorted
+// Also ensure any new default servers are added to stored list
 const storedServers = localStorage.getItem("servers");
-servers.value = storedServers
-  ? JSON.parse(storedServers)
-  : shuffle(defaultServers);
+if (storedServers) {
+  const parsed: string[] = JSON.parse(storedServers);
+  const missing = defaultServers.filter((s) => !parsed.includes(s));
+  if (missing.length > 0) {
+    parsed.push(...missing);
+    localStorage.setItem("servers", JSON.stringify(parsed));
+  }
+  servers.value = parsed;
+} else {
+  servers.value = shuffle(defaultServers);
+}
 
 connect();

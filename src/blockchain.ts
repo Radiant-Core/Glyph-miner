@@ -14,13 +14,14 @@ import {
   miningStatus,
   mintMessage,
   rejected,
+  selectedContract,
   utxos,
   wallet,
   work,
 } from "./signals";
 import { addMessage } from "./message";
 import miner, { updateWork } from "./miner";
-import { reverseRef, scriptHash } from "./utils";
+import { reverseRef, scriptHash, deriveSubContractRef } from "./utils";
 import { broadcast, client, fetchRef, fetchTx } from "./client";
 import { Contract, Work, Utxo, AlgorithmId } from "./types";
 import { FEE_PER_KB } from "./constants";
@@ -320,14 +321,15 @@ export function subscribeToAddress() {
   }
 }
 
-function mintedOut(location: string) {
+async function mintedOut(location: string) {
   if (!contract.value) return;
 
-  miningEnabled.value = false;
-  miner.stop();
+  const currentContractRef = contract.value.contractRef;
+  const tokenRef = contract.value.tokenRef;
+
   addMessage({
     type: "minted-out",
-    ref: reverseRef(contract.value.contractRef),
+    ref: reverseRef(currentContractRef),
   });
 
   // No contract data exists in burn output so use existing data and set height to max
@@ -336,6 +338,55 @@ function mintedOut(location: string) {
     location,
     height: contract.value.maxHeight,
   };
+
+  // Auto-switch: try to find the next available sub-contract
+  const beContractRef = reverseRef(currentContractRef);
+  const beTokenRef = reverseRef(tokenRef);
+  const currentVout = parseInt(beContractRef.substring(64), 16);
+  const tokenVout = parseInt(beTokenRef.substring(64), 16);
+  const currentSubIndex = currentVout - tokenVout - 1;
+
+  addMessage({ type: "general", msg: "Searching for next available sub-contract..." });
+
+  // Scan forward from the next sub-contract
+  for (let i = currentSubIndex + 1; i < currentSubIndex + 64; i++) {
+    const candidateRef = deriveSubContractRef(beTokenRef, i);
+    try {
+      const token = await fetchToken(candidateRef);
+      if (token && token.contract.height < token.contract.maxHeight) {
+        addMessage({ type: "general", msg: `Auto-switching to sub-contract ${i + 1}` });
+        selectedContract.value = candidateRef;
+        changeToken(candidateRef);
+        miningEnabled.value = true;
+        return;
+      }
+    } catch {
+      // No more sub-contracts found, stop scanning
+      break;
+    }
+  }
+
+  // Also try from the beginning in case earlier sub-contracts became available
+  for (let i = 0; i < currentSubIndex; i++) {
+    const candidateRef = deriveSubContractRef(beTokenRef, i);
+    try {
+      const token = await fetchToken(candidateRef);
+      if (token && token.contract.height < token.contract.maxHeight) {
+        addMessage({ type: "general", msg: `Auto-switching to sub-contract ${i + 1}` });
+        selectedContract.value = candidateRef;
+        changeToken(candidateRef);
+        miningEnabled.value = true;
+        return;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  // No available sub-contracts found
+  miningEnabled.value = false;
+  miner.stop();
+  addMessage({ type: "general", msg: "All sub-contracts are fully mined. Mining stopped." });
 }
 
 export function foundNonce(nonce: string) {

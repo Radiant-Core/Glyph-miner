@@ -29,6 +29,7 @@ export interface ContractSummaryItem {
   daaModeName: string;
   iconType?: string;
   iconData?: string;
+  iconUrl?: string;
 }
 
 // Cache for API availability check
@@ -330,5 +331,6 @@ function mapExtendedToSummary(c: ExtendedContract): ContractSummaryItem {
     daaModeName: c.daa_mode_name || "Fixed",
     iconType: c.icon_type || undefined,
     iconData: c.icon_data || undefined,
+    iconUrl: c.icon_url || undefined,
   };
 }
