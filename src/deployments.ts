@@ -9,8 +9,27 @@ import {
   fetchContractsExtended, 
   fetchMostProfitable,
   isDmintApiAvailable,
-  ExtendedContract 
+  ExtendedContract,
+  ExtendedContractsResponse 
 } from "./dmint-api";
+
+// Lightweight contract summary for fast list rendering
+export interface ContractSummaryItem {
+  ref: string;
+  ticker: string;
+  name: string;
+  outputs: number;
+  algorithm: number;
+  difficulty: number;
+  reward: number;
+  percentMined: number;
+  active: boolean;
+  deployHeight: number;
+  daaMode: number;
+  daaModeName: string;
+  iconType?: string;
+  iconData?: string;
+}
 
 // Cache for API availability check
 let apiAvailable: boolean | null = null;
@@ -256,4 +275,60 @@ export async function fetchDeployments(
 
 export async function getCachedTokenContracts(firstRef: string) {
   return await localforage.getItem<ContractGroup>(`contractGroup.${firstRef}`);
+}
+
+/**
+ * Fast fetch of contract summaries from the extended JSON endpoint.
+ * Returns all contracts in a single HTTP request — no per-contract RPC calls.
+ * Falls back to Electrum RPC extended format, then to null.
+ */
+const EXTENDED_CONTRACTS_URL = "https://glyph-miner.com/contracts-extended.json";
+
+export async function fetchContractSummaries(): Promise<ContractSummaryItem[]> {
+  // Try HTTPS extended endpoint first (fastest — single HTTP call)
+  try {
+    const response = await fetch(EXTENDED_CONTRACTS_URL, { signal: AbortSignal.timeout(8000) });
+    if (response.ok) {
+      const data = await response.json() as ExtendedContractsResponse;
+      if (data?.contracts?.length > 0) {
+        console.log(`Fast-loaded ${data.contracts.length} contracts from extended endpoint`);
+        return data.contracts.map(mapExtendedToSummary);
+      }
+    }
+  } catch (e) {
+    console.debug("Extended endpoint not available, trying API:", e);
+  }
+
+  // Try Electrum RPC extended format
+  if (useIndexerApi.value) {
+    const isAvailable = await checkApiAvailable();
+    if (isAvailable) {
+      const response = await fetchContractsExtended();
+      if (response?.contracts?.length) {
+        console.log(`Loaded ${response.contracts.length} contracts from Electrum API`);
+        return response.contracts.map(mapExtendedToSummary);
+      }
+    }
+  }
+
+  return [];
+}
+
+function mapExtendedToSummary(c: ExtendedContract): ContractSummaryItem {
+  return {
+    ref: c.ref,
+    ticker: c.ticker || "???",
+    name: c.name || "",
+    outputs: c.outputs,
+    algorithm: c.algorithm,
+    difficulty: c.difficulty,
+    reward: c.reward,
+    percentMined: c.percent_mined,
+    active: c.active,
+    deployHeight: c.deploy_height,
+    daaMode: c.daa_mode ?? 0,
+    daaModeName: c.daa_mode_name || "Fixed",
+    iconType: c.icon_type || undefined,
+    iconData: c.icon_data || undefined,
+  };
 }

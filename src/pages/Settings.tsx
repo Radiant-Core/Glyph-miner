@@ -142,14 +142,14 @@ export default function Settings() {
 
   return (
     <>
-      <Box bg="bg.300">
+      <Box bg="bg.300" borderBottom="1px solid" borderBottomColor="whiteAlpha.50">
         <Container maxW="container.lg">
           <Flex
             justifyContent="space-between"
-            h={{ base: "64px", md: "128px" }}
+            h={{ base: "64px", md: "96px" }}
             alignItems="center"
           >
-            <Heading size="lg" fontWeight="400">
+            <Heading size="lg" fontWeight="500">
               Settings
             </Heading>
             <IconButton
@@ -158,40 +158,51 @@ export default function Settings() {
               aria-label="Close"
               to="/"
               ml={4}
+              variant="ghost"
+              size="sm"
             />
           </Flex>
         </Container>
       </Box>
-      <Container maxW="container.lg" py={4}>
-        <Box gap={4} bg="bg.100" p={4} mb={4} as="form" onSubmit={onSave}>
+      <Container maxW="container.lg" py={6}>
+        <Box
+          bg="bg.100"
+          p={6}
+          mb={4}
+          as="form"
+          onSubmit={onSave}
+          borderRadius="2xl"
+          border="1px solid"
+          borderColor="whiteAlpha.50"
+        >
           {error && (
-            <Alert status="error" mb={4}>
+            <Alert status="error" mb={4} borderRadius="xl">
               {error}
             </Alert>
           )}
-          <FormControl mb={4} isRequired>
-            <FormLabel>Mine to address</FormLabel>
+          <FormControl mb={5} isRequired>
+            <FormLabel fontWeight="semibold" fontSize="sm">Mine to address</FormLabel>
             <Input
               name="mineToAddress"
               defaultValue={form.mineToAddress}
               onChange={onFormChange}
             />
-            <FormHelperText>
+            <FormHelperText fontSize="xs">
               Radiant address to send mined tokens to
             </FormHelperText>
           </FormControl>
-          <FormControl mb={4}>
-            <FormLabel>Mint message</FormLabel>
+          <FormControl mb={5}>
+            <FormLabel fontWeight="semibold" fontSize="sm">Mint message</FormLabel>
             <Input
               name="mintMessage"
               defaultValue={form.mintMessage}
               maxLength={80}
               onChange={onFormChange}
             />
-            <FormHelperText>Written on-chain on successful mint</FormHelperText>
+            <FormHelperText fontSize="xs">Written on-chain on successful mint</FormHelperText>
           </FormControl>
-          <FormControl mb={4}>
-            <FormLabel>Hide messages from other miners</FormLabel>
+          <FormControl mb={5}>
+            <FormLabel fontWeight="semibold" fontSize="sm">Hide messages from other miners</FormLabel>
             <Select
               name="hideMessages"
               defaultValue={form.hideMessages}
@@ -202,20 +213,20 @@ export default function Settings() {
               <option value="1">Yes</option>
             </Select>
           </FormControl>
-          <FormControl mb={4}>
-            <FormLabel>Servers</FormLabel>
+          <FormControl mb={5}>
+            <FormLabel fontWeight="semibold" fontSize="sm">Servers</FormLabel>
             <Textarea
               name="servers"
               defaultValue={form.servers}
               onChange={onFormChange}
               rows={3}
             ></Textarea>
-            <FormHelperText>
+            <FormHelperText fontSize="xs">
               List of servers in order of preference
             </FormHelperText>
           </FormControl>
-          <FormControl mb={4}>
-            <FormLabel>Use RXinDexer API</FormLabel>
+          <FormControl mb={5}>
+            <FormLabel fontWeight="semibold" fontSize="sm">Use RXinDexer API</FormLabel>
             <Select
               name="useIndexerApi"
               defaultValue={form.useIndexerApi}
@@ -225,31 +236,39 @@ export default function Settings() {
               <option value="1">Yes (recommended)</option>
               <option value="">No (use fallback URL)</option>
             </Select>
-            <FormHelperText>
+            <FormHelperText fontSize="xs">
               Fetch contracts from RXinDexer dMint API. Falls back to URL if unavailable.
             </FormHelperText>
           </FormControl>
-          <FormControl mb={4}>
-            <FormLabel>Contracts URL (fallback)</FormLabel>
+          <FormControl mb={5}>
+            <FormLabel fontWeight="semibold" fontSize="sm">Contracts URL (fallback)</FormLabel>
             <Input
               name="contractsUrl"
               defaultValue={form.contractsUrl}
               onChange={onFormChange}
             />
-            <FormHelperText>
+            <FormHelperText fontSize="xs">
               Used when RXinDexer API is disabled or unavailable
             </FormHelperText>
           </FormControl>
           <Center>
-            <Button type="submit">Save</Button>
+            <Button type="submit" size="lg" px={12}>Save</Button>
           </Center>
         </Box>
-        <Box gap={4} bg="bg.100" p={4} mb={4}>
+
+        <Box
+          bg="bg.100"
+          p={6}
+          mb={4}
+          borderRadius="2xl"
+          border="1px solid"
+          borderColor="whiteAlpha.50"
+        >
           {wallet.value ? (
             <>
-              <Alert status="warning">
+              <Alert status="warning" borderRadius="xl">
                 <AlertIcon />
-                <Box>
+                <Box fontSize="sm">
                   <b>
                     This is a temporary wallet that is not password protected.
                   </b>{" "}
@@ -258,10 +277,10 @@ export default function Settings() {
                   mining.
                 </Box>
               </Alert>
-              <Flex direction="column" alignItems="center" mt={4}>
-                <Heading fontSize="large">Temporary Address</Heading>
+              <Flex direction="column" alignItems="center" mt={6}>
+                <Heading fontSize="md" mb={2}>Temporary Address</Heading>
                 <Box>
-                  <Code>{wallet.value.address}</Code>
+                  <Code fontSize="xs">{wallet.value.address}</Code>
                   <IconButton
                     display="inline"
                     onClick={onCopy}
@@ -277,21 +296,23 @@ export default function Settings() {
                     size="xs"
                   />
                 </Box>
-                <Box bgColor="white" p={2} mt={2}>
+                <Box bgColor="white" p={2} mt={3} borderRadius="lg">
                   <QRCodeSVG size={128} value={wallet.value.address} />
                 </Box>
-                <Heading fontSize="large" mt={4}>
+                <Heading fontSize="md" mt={5}>
                   Balance
                 </Heading>
                 <Balance /> RXD
-                <Heading fontSize="large" mt={4}>
+                <Heading fontSize="md" mt={5}>
                   Recovery phrase:
                 </Heading>
                 <Box
                   textAlign="center"
-                  p={2}
+                  p={3}
                   mt={2}
-                  borderWidth="2px"
+                  borderWidth="1px"
+                  borderColor="whiteAlpha.200"
+                  borderRadius="xl"
                   alignSelf="stretch"
                 >
                   {showMnemonic ? (
@@ -301,25 +322,31 @@ export default function Settings() {
                       </>
                     ))
                   ) : (
-                    <Button onClick={() => setShowMnemonic(true)}>Show</Button>
+                    <Button onClick={() => setShowMnemonic(true)} variant="outline" size="sm">Show</Button>
                   )}
                 </Box>
               </Flex>
             </>
           ) : (
-            <Alert status="error">
+            <Alert status="error" borderRadius="xl">
               <AlertIcon />
               No wallet found
             </Alert>
           )}
         </Box>
-        <Box gap={4} bg="bg.100" p={4}>
-          <Heading size="md">Sweep</Heading>
-          <Box my={4}>
-            Sweeping will send all coins to your address:{" "}
-            <Code>{mineToAddress.value || "no address set"}</Code>
-          </Box>
 
+        <Box
+          bg="bg.100"
+          p={6}
+          borderRadius="2xl"
+          border="1px solid"
+          borderColor="whiteAlpha.50"
+        >
+          <Heading size="md" mb={4}>Sweep</Heading>
+          <Box my={4} fontSize="sm">
+            Sweeping will send all coins to your address:{" "}
+            <Code fontSize="xs">{mineToAddress.value || "no address set"}</Code>
+          </Box>
           <Center>
             <Button
               mr={3}

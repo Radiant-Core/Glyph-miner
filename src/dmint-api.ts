@@ -20,6 +20,12 @@ export interface ExtendedContract {
   percent_mined: number;
   active: boolean;
   deploy_height: number;
+  daa_mode?: number;
+  daa_mode_name?: string;
+  icon_type?: string;
+  icon_data?: string;
+  total_supply?: number;
+  mined_supply?: number;
 }
 
 export interface ExtendedContractsResponse {
