@@ -2,7 +2,7 @@
 // Self-contained implementation without includes
 
 @group(0) @binding(0) var<storage, read> midstate: array<u32>;
-@group(0) @binding(1) var<storage, read> target: array<u32>;
+@group(0) @binding(1) var<storage, read> mining_target: array<u32>;
 @group(0) @binding(2) var<storage, read_write> results: array<atomic<u32>>;
 @group(0) @binding(3) var<storage, read> nonce_offset: array<u32>;
 
@@ -73,33 +73,33 @@ fn permute_msg(m: ptr<function, array<u32, 16>>) {
     (*m)[12u] = t9; (*m)[13u] = t14; (*m)[14u] = t15; (*m)[15u] = t8;
 }
 
-// Check if hash meets target difficulty
+// Check if hash meets mining_target difficulty
 // CPU verification expects:
 // 1. First 4 bytes (hash[0] as LE u32) must be 0
-// 2. Bytes 4-11 read as big-endian u64 < target
-fn check_target(hash: array<u32, 8>) -> bool {
+// 2. Bytes 4-11 read as big-endian u64 < mining_target
+fn check_mining_target(hash: array<u32, 8>) -> bool {
     // Check 1: First 32 bits must be zero
     if (hash[0u] != 0u) {
         return false;
     }
     
-    // Check 2: Compare bytes 4-11 as big-endian against target
+    // Check 2: Compare bytes 4-11 as big-endian against mining_target
     // hash[1] contains bytes 4-7 in little-endian, need to swap to big-endian
     // hash[2] contains bytes 8-11 in little-endian, need to swap to big-endian
     let h1_be = bswap32(hash[1u]);
     let h2_be = bswap32(hash[2u]);
     
-    // target[1] = high 32 bits of target (already in correct format)
-    // target[2] = low 32 bits of target
-    // Compare as 64-bit big-endian: (h1_be, h2_be) < (target[1], target[2])
-    if (h1_be < target[1u]) {
+    // mining_target[1] = high 32 bits of mining_target (already in correct format)
+    // mining_target[2] = low 32 bits of mining_target
+    // Compare as 64-bit big-endian: (h1_be, h2_be) < (mining_target[1], mining_target[2])
+    if (h1_be < mining_target[1u]) {
         return true;
     }
-    if (h1_be > target[1u]) {
+    if (h1_be > mining_target[1u]) {
         return false;
     }
-    // h1_be == target[1], check h2_be
-    if (h2_be < target[2u]) {
+    // h1_be == mining_target[1], check h2_be
+    if (h2_be < mining_target[2u]) {
         return true;
     }
     return false;
@@ -168,8 +168,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         hash[i] = state[i] ^ state[i + 8u];
     }
     
-    // Check if hash meets target
-    if (check_target(hash)) {
+    // Check if hash meets mining_target
+    if (check_mining_target(hash)) {
         // results[0] is the atomic result counter
         // results[4..7], results[8..11], ... store per-result data
         let idx = atomicAdd(&results[0], 1u);

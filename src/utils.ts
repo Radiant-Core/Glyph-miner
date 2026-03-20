@@ -34,7 +34,7 @@ export function isRef(ref: string) {
   return ref.match(/^[0-9a-f]{64}[0-9a-f]{8}$/);
 }
 
-export function shuffle(array: unknown[]) {
+export function shuffle<T>(array: T[]): T[] {
   let currentIndex = array.length;
 
   while (currentIndex != 0) {

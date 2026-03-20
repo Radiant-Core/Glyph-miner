@@ -3,7 +3,7 @@
 // Mining: K12(preimage(64B) || nonce(4B+pad)) with length_encode(0)={0x00} framing
 
 @group(0) @binding(0) var<storage, read> midstate: array<u32>;
-@group(0) @binding(1) var<storage, read> target: array<u32>;
+@group(0) @binding(1) var<storage, read> mining_target: array<u32>;
 @group(0) @binding(2) var<storage, read_write> results: array<atomic<u32>>;
 @group(0) @binding(3) var<storage, read> nonce_offset: array<u32>;
 
@@ -110,13 +110,13 @@ fn bswap32(x: u32) -> u32 {
            ((x >> 8u) & 0xFF00u) | (x >> 24u);
 }
 
-fn check_target(hash: array<u32, 8>) -> bool {
+fn check_mining_target(hash: array<u32, 8>) -> bool {
     if (hash[0u] != 0u) { return false; }
     let h1_be = bswap32(hash[1u]);
     let h2_be = bswap32(hash[2u]);
-    if (h1_be < target[1u]) { return true; }
-    if (h1_be > target[1u]) { return false; }
-    if (h2_be < target[2u]) { return true; }
+    if (h1_be < mining_target[1u]) { return true; }
+    if (h1_be > mining_target[1u]) { return false; }
+    if (h2_be < mining_target[2u]) { return true; }
     return false;
 }
 
@@ -151,7 +151,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var hash: array<u32, 8>;
     for (var i = 0u; i < 8u; i = i + 1u) { hash[i] = state[i]; }
 
-    if (check_target(hash)) {
+    if (check_mining_target(hash)) {
         let idx = atomicAdd(&results[0], 1u);
         if (idx < 255u) {
             let base = (idx + 1u) * 4u;
