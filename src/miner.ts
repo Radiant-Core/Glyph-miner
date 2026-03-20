@@ -265,7 +265,7 @@ const start = async () => {
     const midstateSize = 64;
     const targetSize = 12; // 3 u32s (pad, high, low)
     const resultsSize = 256 * 16; // 256 vec4<u32>
-    const nonceSize = 4; // 1 u32
+    const nonceSize = 8; // 2 u32s (low offset + high nonce)
 
     const midstateBuffer = device.createBuffer({
       label: "midstate buffer", size: midstateSize,
@@ -309,6 +309,7 @@ const start = async () => {
     device.queue.writeBuffer(targetBuffer, 0, new Uint32Array([0, targetHigh, targetLow]));
 
     let nonceStart = 0;
+    let nonce1 = Math.round(Math.random() * 0xffffffff);
     let startTime = Date.now();
     const maxNonce = 0xffffffff - numInvocations;
 
@@ -316,13 +317,17 @@ const start = async () => {
       if (nonceStart > maxNonce) {
         hashrate.value = (nonceStart / (Date.now() - startTime)) * 1000;
         nonceStart = 0;
+        nonce1++;
+        if (nonce1 > 0xffffffff) {
+          nonce1 = 0;
+        }
         startTime = Date.now();
       }
 
       // Clear results counter
       device.queue.writeBuffer(resultsBuffer, 0, new Uint32Array([0, 0, 0, 0]));
-      // Write nonce offset
-      device.queue.writeBuffer(nonceOffsetBuffer, 0, new Uint32Array([nonceStart]));
+      // Write nonce offset (low) + high nonce counter
+      device.queue.writeBuffer(nonceOffsetBuffer, 0, new Uint32Array([nonceStart, nonce1]));
 
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginComputePass();
@@ -340,7 +345,7 @@ const start = async () => {
         // First result at flat offset 4: [nonce, hash0, hash1, flag]
         const foundNonceVal = range[4];
         // GPU stores nonce as LE u32 — convert to LE hex bytes for CPU verify & on-chain claim
-        const nonceHex = swapEndianness(foundNonceVal.toString(16).padStart(8, "0")) + "00000000";
+        const nonceHex = swapEndianness(foundNonceVal.toString(16).padStart(8, "0")) + swapEndianness(nonce1.toString(16).padStart(8, "0"));
         // CPU-side verification before submitting
         const verifyFn = algorithm === 'blake3' ? verifyBlake3 : verify;
         if (verifyFn(work.target, midstate.preimage, nonceHex)) {

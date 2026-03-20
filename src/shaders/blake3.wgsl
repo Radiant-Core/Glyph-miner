@@ -141,8 +141,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     
     // Second block: nonce (8 bytes) + padding
     var m2: array<u32, 16>;
-    m2[0u] = nonce;      // nonce low 32 bits
-    m2[1u] = id.y;       // nonce high 32 bits (from dispatch y)
+    m2[0u] = nonce;              // nonce low 32 bits
+    m2[1u] = nonce_offset[1u];   // nonce high 32 bits (from CPU counter)
     for (var i = 2u; i < 16u; i = i + 1u) {
         m2[i] = 0u;
     }

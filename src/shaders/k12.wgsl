@@ -132,8 +132,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     for (var i = 0u; i < 16u; i = i + 1u) { state[i] = midstate[i]; }
 
     // Absorb nonce (bytes 64-71 = lane 8)
-    state[16u] = nonce;       // lo of lane 8
-    state[17u] = global_id.y; // hi of lane 8 (0 for 1D dispatch)
+    state[16u] = nonce;              // lo of lane 8
+    state[17u] = nonce_offset[1u];   // hi of lane 8 (from CPU counter)
 
     // K12 framing: length_encode(0) = {0x00} (1 byte, NOT {0x00,0x01})
     // K12 spec: K12(M,"") = TurboSHAKE128(M || 0x00 || 0x07, 0x07)
