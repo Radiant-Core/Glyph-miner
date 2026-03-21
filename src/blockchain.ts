@@ -398,7 +398,7 @@ export function foundNonce(nonce: string) {
 }
 
 async function submit() {
-  console.debug("Submitting");
+  console.debug("Submitting", { nonceCount: nonces.length, ready, contract: !!contract.value, work: !!work.value });
   const nonce = nonces.pop();
 
   // TODO handle multiple nonces, if one fails try the next

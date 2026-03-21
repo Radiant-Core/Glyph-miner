@@ -200,5 +200,8 @@ export async function fetchRef(ref: string) {
 }
 
 export async function broadcast(hex: string) {
-  return await client.request("blockchain.transaction.broadcast", hex);
+  console.debug("Broadcasting transaction, length:", hex.length);
+  const result = await client.request("blockchain.transaction.broadcast", hex);
+  console.debug("Broadcast response:", result);
+  return result;
 }
