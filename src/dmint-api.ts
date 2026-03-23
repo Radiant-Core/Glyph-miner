@@ -8,6 +8,32 @@
 
 import { client } from "./client";
 
+let getContractSupported: boolean | null = null;
+let getContractsSupported: boolean | null = null;
+let warnedGetContractUnsupported = false;
+let warnedGetContractsUnsupported = false;
+const extendedContractsCache = new Map<string, ExtendedContract>();
+
+function normalizeRef(ref: string): string {
+  return ref.toLowerCase().replace(/[^0-9a-f]/g, "");
+}
+
+function isUnsupportedMethodError(message: string): boolean {
+  const m = message.toLowerCase();
+  return m.includes("unknown method") || m.includes("not supported") || m.includes("method not found");
+}
+
+function indexExtendedContracts(contracts: ExtendedContract[]): void {
+  extendedContractsCache.clear();
+  for (const c of contracts) {
+    extendedContractsCache.set(normalizeRef(c.ref), c);
+  }
+}
+
+function getFromExtendedCache(ref: string): ExtendedContract | null {
+  return extendedContractsCache.get(normalizeRef(ref)) ?? null;
+}
+
 // Extended contract info from RXinDexer
 export interface ExtendedContract {
   ref: string;
@@ -37,11 +63,11 @@ export interface ExtendedContractsResponse {
   contracts: ExtendedContract[];
 }
 
-// Algorithm IDs matching RXinDexer
+// Algorithm IDs aligned with Glyph dMint v2
 export const DMINT_ALGORITHM = {
-  NONE: 0x00,
-  SHA256D: 0x01,
-  RADIANTHASH: 0x02,
+  SHA256D: 0x00,
+  BLAKE3: 0x01,
+  K12: 0x02,
 } as const;
 
 /**
@@ -69,17 +95,49 @@ export async function fetchContractsSimple(): Promise<[string, number][]> {
  * Fetch contracts in extended format with full metadata.
  */
 export async function fetchContractsExtended(): Promise<ExtendedContractsResponse | null> {
+  if (getContractsSupported === false) {
+    return null;
+  }
+
   try {
     const result = await client.request("dmint.get_contracts", "extended");
     
     // Handle error response
     if (result && typeof result === 'object' && 'error' in result) {
-      console.warn("dMint API error:", (result as { error: string }).error);
+      const error = (result as { error: string }).error;
+      if (isUnsupportedMethodError(error)) {
+        getContractsSupported = false;
+        if (!warnedGetContractsUnsupported) {
+          console.warn("dmint.get_contracts unsupported; extended RPC fallback disabled");
+          warnedGetContractsUnsupported = true;
+        }
+        return null;
+      }
+
+      getContractsSupported = true;
+      console.warn("dMint API error:", error);
       return null;
     }
-    
-    return result as ExtendedContractsResponse;
+
+    const response = result as ExtendedContractsResponse;
+    getContractsSupported = true;
+    if (Array.isArray(response.contracts)) {
+      indexExtendedContracts(response.contracts);
+    }
+
+    return response;
   } catch (error) {
+    const message = String((error as Error)?.message || error || "");
+    if (isUnsupportedMethodError(message)) {
+      getContractsSupported = false;
+      if (!warnedGetContractsUnsupported) {
+        console.warn("dmint.get_contracts unsupported; extended RPC fallback disabled");
+        warnedGetContractsUnsupported = true;
+      }
+      return null;
+    }
+
+    getContractsSupported = true;
     console.warn("Failed to fetch extended contracts from API:", error);
     return null;
   }
@@ -89,16 +147,77 @@ export async function fetchContractsExtended(): Promise<ExtendedContractsRespons
  * Fetch a single contract by ref.
  */
 export async function fetchContract(ref: string): Promise<ExtendedContract | null> {
+  // If we've already detected dmint.get_contract is unsupported on this server,
+  // resolve from extended contracts cache and avoid repeat RPC errors.
+  if (getContractSupported === false) {
+    const cached = getFromExtendedCache(ref);
+    if (cached) {
+      return cached;
+    }
+
+    const extended = await fetchContractsExtended();
+    if (extended?.contracts?.length) {
+      return getFromExtendedCache(ref);
+    }
+
+    return null;
+  }
+
   try {
     const result = await client.request("dmint.get_contract", ref);
-    
+
     if (result && typeof result === 'object' && 'error' in result) {
-      console.warn("dMint API error:", (result as { error: string }).error);
+      const error = (result as { error: string }).error;
+      if (isUnsupportedMethodError(error)) {
+        getContractSupported = false;
+        if (!warnedGetContractUnsupported) {
+          console.warn("dmint.get_contract unsupported; using extended contracts cache fallback");
+          warnedGetContractUnsupported = true;
+        }
+
+        const cached = getFromExtendedCache(ref);
+        if (cached) {
+          return cached;
+        }
+
+        const extended = await fetchContractsExtended();
+        if (extended?.contracts?.length) {
+          return getFromExtendedCache(ref);
+        }
+
+        return null;
+      }
+
+      getContractSupported = true;
+      console.warn("dMint API error:", error);
       return null;
     }
-    
+
+    getContractSupported = true;
     return result as ExtendedContract;
   } catch (error) {
+    const message = String((error as Error)?.message || error || "");
+    if (isUnsupportedMethodError(message)) {
+      getContractSupported = false;
+      if (!warnedGetContractUnsupported) {
+        console.warn("dmint.get_contract unsupported; using extended contracts cache fallback");
+        warnedGetContractUnsupported = true;
+      }
+
+      const cached = getFromExtendedCache(ref);
+      if (cached) {
+        return cached;
+      }
+
+      const extended = await fetchContractsExtended();
+      if (extended?.contracts?.length) {
+        return getFromExtendedCache(ref);
+      }
+
+      return null;
+    }
+
+    getContractSupported = true;
     console.warn("Failed to fetch contract from API:", error);
     return null;
   }

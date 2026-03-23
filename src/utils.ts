@@ -119,5 +119,20 @@ export function push4bytes(n: number) {
 
 // Push a number with minimal encoding
 export function pushMinimal(n: bigint | number) {
-  return bytesToHex(encodeDataPush(bigIntToVmNumber(BigInt(n))));
+  const value = BigInt(n);
+
+  if (value === 0n) {
+    return "00"; // OP_0
+  }
+
+  if (value === -1n) {
+    return "4f"; // OP_1NEGATE
+  }
+
+  if (value >= 1n && value <= 16n) {
+    const opcode = 0x50 + Number(value); // OP_1 .. OP_16
+    return opcode.toString(16).padStart(2, "0");
+  }
+
+  return bytesToHex(encodeDataPush(bigIntToVmNumber(value)));
 }

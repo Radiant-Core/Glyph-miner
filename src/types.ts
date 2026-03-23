@@ -57,6 +57,7 @@ export type Contract = {
   reward: bigint;
   target: bigint;
   script: string;
+  codeScript?: string;
   message: string;
   // Enhanced contract fields
   algorithm?: AlgorithmId;

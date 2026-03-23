@@ -39,7 +39,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   v[7] = m[6];
   v[5] = m[7];
 
-  w[0] = nonce[0];
+  w[0] = nonce[1] + id.x;
   v[2] += w[0];
   v[2] += S1(v[1]);
   v[2] += ch(v[1], v[4], v[3]);
@@ -48,7 +48,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   v[2] += S0(v[5]);
   v[2] += maj(v[6], v[5], v[7]);
 
-  w[1] = nonce[1] + id.x;
+  w[1] = 0x80000000;
   v[3] += w[1];
   v[3] += S1(v[0]);
   v[3] += ch(v[0], v[1], v[4]);
@@ -57,7 +57,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   v[3] += S0(v[2]);
   v[3] += maj(v[7], v[2], v[5]);
 
-  w[2] = 0x80000000;
+  w[2] = 0;
   v[4] += w[2];
   v[4] += S1(v[6]);
   v[4] += ch(v[6], v[0], v[1]);
@@ -174,7 +174,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   v[7] += S0(v[6]);
   v[7] += maj(v[1], v[6], v[0]);
 
-  w[15] = 0x00000240;
+  w[15] = 0x00000220;
   v[5] += w[15];
   v[5] += S1(v[4]);
   v[5] += ch(v[4], v[3], v[2]);

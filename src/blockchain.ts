@@ -21,22 +21,19 @@ import {
 } from "./signals";
 import { addMessage } from "./message";
 import miner, { updateWork } from "./miner";
-import { reverseRef, scriptHash, deriveSubContractRef } from "./utils";
+import { reverseRef, scriptHash, deriveSubContractRef, push4bytes } from "./utils";
 import { broadcast, client, fetchRef, fetchTx } from "./client";
 import { Contract, Work, Utxo, AlgorithmId } from "./types";
 import { FEE_PER_KB } from "./constants";
 import { fetchContract as fetchContractFromApi } from "./dmint-api";
 
-// Map API algorithm ID to AlgorithmId string
+// Map API algorithm ID to AlgorithmId string (0/1/2 only for now)
 function mapAlgorithmId(apiAlgo: number): AlgorithmId {
-  // API uses: 0=NONE, 1=SHA256D, 2=RADIANTHASH, etc.
-  // But some tokens use different IDs - try to detect Blake3
+  // 0 = sha256d, 1 = blake3, 2 = k12
   switch (apiAlgo) {
-    case 0: return 'sha256d';  // NONE defaults to sha256d
-    case 1: return 'sha256d';  // SHA256D
-    case 2: return 'blake3';   // Could be RADIANTHASH or Blake3
-    case 3: return 'k12';
-    case 4: return 'argon2light';
+    case 0: return 'sha256d';
+    case 1: return 'blake3';
+    case 2: return 'k12';
     default: return 'sha256d';
   }
 }
@@ -67,6 +64,74 @@ enum ClaimError {
   CONTRACT_FAIL,
   MISSING_INPUTS,
   LOW_FEE,
+  NON_MINIMAL_PUSH,
+}
+
+function extractCodeScriptHashOp(codeScript?: string): "aa" | "ee" | "ef" | undefined {
+  if (!codeScript) return;
+  const match = codeScript
+    .toLowerCase()
+    .match(/7ea87e5a7a7e(aa|ee|ef)bc01147f/);
+  return match?.[1] as "aa" | "ee" | "ef" | undefined;
+}
+
+function mapHashOpToAlgorithm(hashOp?: "aa" | "ee" | "ef"): AlgorithmId | undefined {
+  switch (hashOp) {
+    case "aa":
+      return "sha256d";
+    case "ee":
+      return "blake3";
+    case "ef":
+      return "k12";
+    default:
+      return;
+  }
+}
+
+const NONCE_BYTES: 4 = 4;
+
+function normalizeNonceHex(nonceHex: string, nonceBytes: 4): string {
+  const normalized = nonceHex.trim().toLowerCase();
+  const requiredHexLength = nonceBytes * 2;
+  if (normalized.length === requiredHexLength) return normalized;
+  if (normalized.length > requiredHexLength) {
+    return normalized.substring(0, requiredHexLength);
+  }
+  return normalized.padStart(requiredHexLength, "0");
+}
+
+function findNonMinimalDataPush(scriptHex: string): string | undefined {
+  const asm = Script.fromHex(scriptHex).toASM();
+  const parts = asm.split(" ");
+
+  for (const token of parts) {
+    if (!/^[0-9a-f]{2}$/i.test(token)) continue;
+    const value = Number.parseInt(token, 16);
+
+    if (value === 0 || (value >= 1 && value <= 16) || value === 0x81) {
+      return token.toLowerCase();
+    }
+  }
+
+  return;
+}
+
+function buildNextContractScript(contract: Contract, newHeight: bigint): string {
+  // contract.script stores the mutable state section. Replace only the first
+  // 4-byte height push and preserve the rest exactly as-is.
+  const nextStateScript = `${push4bytes(Number(newHeight))}${contract.script.substring(10)}`;
+
+  // If codeScript was parsed from chain, preserve it exactly so algorithm/DAA
+  // specific bytecode remains unchanged.
+  if (contract.codeScript) {
+    return `${nextStateScript}bd${contract.codeScript}`;
+  }
+
+  // Legacy fallback for older parsed contracts without codeScript.
+  return dMintScript({
+    ...contract,
+    height: newHeight,
+  });
 }
 
 async function claimTokens(
@@ -80,11 +145,46 @@ async function claimTokens(
 
   const newHeight = contract.height + 1n;
   const lastMint = newHeight === contract.maxHeight;
+  const nonceBytes = NONCE_BYTES;
+  const nonceForScriptSig = normalizeNonceHex(nonce, nonceBytes);
   const inputScriptHash = bytesToHex(sha256(sha256(work.inputScript)));
   const outputScriptHash = bytesToHex(sha256(sha256(work.outputScript)));
+  const fundingInputCount = utxos.value.length;
+  const fundingInputsMatchInputHash = fundingInputCount > 0;
+  const codeScriptHashOp = extractCodeScriptHashOp(contract.codeScript);
+  const fullContractScript = contract.codeScript
+    ? `${contract.script}bd${contract.codeScript}`
+    : contract.script;
+  const nonMinimalPush = findNonMinimalDataPush(fullContractScript);
+
+  console.debug("Pre-submit validation", {
+    nonceHexLength: nonceForScriptSig.length,
+    nonceByteLength: nonceForScriptSig.length / 2,
+    nonceMode: `${nonceBytes}-byte`,
+    fundingInputCount,
+    fundingInputsMatchInputHash,
+    codeScriptHashOp,
+    nonMinimalPush,
+    inputScriptHash,
+    outputScriptHash,
+  });
+
+  if (nonMinimalPush) {
+    console.warn(
+      `Blocking submit: contract script contains non-minimal push (${nonMinimalPush}); node rejects with Data push larger than necessary`
+    );
+    return { success: false, error: ClaimError.NON_MINIMAL_PUSH };
+  }
+
+  if (!fundingInputsMatchInputHash) {
+    console.warn(
+      `Blocking submit: no funding inputs available for required inputHash ${inputScriptHash}`
+    );
+    return { success: false, error: ClaimError.MISSING_INPUTS };
+  }
 
   const scriptSig = Script.fromASM(
-    `${nonce} ${inputScriptHash} ${outputScriptHash} 0`
+    `${nonceForScriptSig} ${inputScriptHash} ${outputScriptHash} 0`
   );
 
   const tx = new Transaction();
@@ -130,10 +230,7 @@ async function claimTokens(
       })
     );
   } else {
-    const dmint = dMintScript({
-      ...contract,
-      height: contract.height + 1n,
-    });
+    const dmint = buildNextContractScript(contract, newHeight);
     tx.addOutput(
       new Transaction.Output({
         satoshis: 1,
@@ -159,6 +256,38 @@ async function claimTokens(
   tx.change(wallet.value.address);
   tx.sign(privKey);
   tx.seal();
+
+  const scriptSigAsm = scriptSig.toASM();
+  const scriptSigParts = scriptSigAsm.split(" ");
+  const txOutputAudit = tx.outputs.map((output, index) => {
+    const scriptHex = output.script.toHex();
+    return {
+      index,
+      scriptHash: bytesToHex(sha256(sha256(hexToBytes(scriptHex)))),
+      scriptHex,
+    };
+  });
+  const codeScriptAlgo = mapHashOpToAlgorithm(codeScriptHashOp);
+
+  console.debug("Contract submit audit", {
+    nonce: nonceForScriptSig,
+    algorithm: work.algorithm || contract.algorithm || codeScriptAlgo,
+    codeScriptHashOp,
+    target: contract.target.toString(),
+    contractLocation: contract.location,
+    contractOutputIndex: contract.outputIndex,
+    scriptSigAsm,
+    scriptSigPartCount: scriptSigParts.length,
+    scriptSigNonceLen: scriptSigParts[0]?.length,
+    scriptSigInputHashLen: scriptSigParts[1]?.length,
+    scriptSigOutputHashLen: scriptSigParts[2]?.length,
+    inputScriptHash,
+    outputScriptHash,
+    txInputCount: tx.inputs.length,
+    txOutputCount: tx.outputs.length,
+    txOutputAudit,
+  });
+
   const hex = tx.toString();
   try {
     console.debug("Broadcasting", hex);
@@ -408,6 +537,16 @@ async function submit() {
     return;
   }
 
+  const codeScriptHashOp = extractCodeScriptHashOp(contract.value.codeScript);
+  const nonceBytes = NONCE_BYTES;
+  console.debug("Submit context", {
+    nonceHexLength: nonce.length,
+    nonceByteLength: nonce.length / 2,
+    nonceMode: `${nonceBytes}-byte`,
+    fundingInputCount: utxos.value.length,
+    codeScriptHashOp,
+  });
+
   ready = false;
 
   const result = await claimTokens(contract.value, work.value, nonce);
@@ -458,14 +597,31 @@ async function submit() {
 
     if (
       result.error === ClaimError.MISSING_INPUTS ||
-      result.error === ClaimError.CONTRACT_FAIL
+      result.error === ClaimError.CONTRACT_FAIL ||
+      result.error === ClaimError.NON_MINIMAL_PUSH
     ) {
       clearTimeout(subscriptionCheckTimer);
 
       if (result.error === ClaimError.MISSING_INPUTS) {
         // This should be caught by subscription and subscriptionCheckTimer, but handle here in case
         rejectMessage("missing inputs");
+      } else if (result.error === ClaimError.NON_MINIMAL_PUSH) {
+        rejectMessage("contract uses non-minimal pushdata");
+        addMessage({
+          type: "general",
+          msg: "Contract script is non-minimal and cannot be mined on this node policy",
+        });
+        miner.stop();
+        miningEnabled.value = false;
+        addMessage({ type: "stop" });
       } else {
+        console.debug("Contract fail context", {
+          algorithm: (work.value as (Work & { algorithm?: string }) | undefined)?.algorithm,
+          codeScriptHashOp: extractCodeScriptHashOp(contract.value?.codeScript),
+          nonce,
+          inputScriptHash: work.value ? bytesToHex(sha256(sha256(work.value.inputScript))) : undefined,
+          outputScriptHash: work.value ? bytesToHex(sha256(sha256(work.value.outputScript))) : undefined,
+        });
         rejectMessage("contract execution failed");
       }
 
@@ -507,8 +663,17 @@ export async function changeToken(ref: string) {
       )}`
     );
     const sh = scriptHash(work.value?.contractRef);
-    // This will cause an error "unsubscribe is unknown method" but seems to work anyway
-    client.unsubscribe("blockchain.scripthash", sh);
+    // Some Electrum servers don't implement unsubscribe. Ignore that specific RPC error.
+    void client
+      .unsubscribe("blockchain.scripthash", sh)
+      .catch((error: unknown) => {
+        const msg = String((error as Error)?.message || error || "").toLowerCase();
+        if (msg.includes("unknown method")) {
+          console.debug("Server does not support blockchain.scripthash.unsubscribe");
+          return;
+        }
+        console.debug("Failed to unsubscribe from current contract", error);
+      });
   }
 
   const token = await fetchToken(ref);
@@ -519,8 +684,10 @@ export async function changeToken(ref: string) {
     return;
   }
 
-  // Try to get algorithm from dmint API
-  let algorithm: AlgorithmId = 'sha256d';
+  // Try to get algorithm from dmint API.
+  // If API is unavailable, leave algorithm undefined so miner can fall back
+  // to algorithm from glyph payload.
+  let algorithm: AlgorithmId | undefined;
   try {
     const apiContract = await fetchContractFromApi(ref);
     if (apiContract) {
@@ -531,8 +698,10 @@ export async function changeToken(ref: string) {
     console.warn("Failed to fetch algorithm from API:", e);
   }
 
-  // Store algorithm in contract
-  contract.value = { ...token.contract, algorithm };
+  // Store algorithm in contract only when API provided it
+  contract.value = algorithm
+    ? { ...token.contract, algorithm }
+    : { ...token.contract };
   glyph.value = token.glyph;
   updateWork();
 

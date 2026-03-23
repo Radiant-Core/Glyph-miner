@@ -139,11 +139,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         cv[i] = state[i] ^ state[i + 8u];
     }
     
-    // Second block: nonce (8 bytes) + padding
+    // Second block: nonce (4 bytes) + padding
     var m2: array<u32, 16>;
-    m2[0u] = nonce;              // nonce low 32 bits
-    m2[1u] = nonce_offset[1u];   // nonce high 32 bits (from CPU counter)
-    for (var i = 2u; i < 16u; i = i + 1u) {
+    m2[0u] = nonce;
+    for (var i = 1u; i < 16u; i = i + 1u) {
         m2[i] = 0u;
     }
     
@@ -153,7 +152,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     state[8u] = IV0; state[9u] = IV1; state[10u] = IV2; state[11u] = IV3;
     state[12u] = 0u; // counter low (chunk counter stays 0 for single chunk)
     state[13u] = 0u; // counter high
-    state[14u] = 8u; // block length (8 bytes of nonce)
+    state[14u] = 4u; // block length (4 bytes of nonce)
     state[15u] = 0x0Au; // flags: CHUNK_END | ROOT = 0x02 | 0x08 = 0x0A
     
     // 7 rounds of Blake3 compression for second block

@@ -2,6 +2,7 @@ import { sha256 as jsSha256, Hasher } from "js-sha256";
 import { hexToBytes, bytesToHex } from "@noble/hashes/utils";
 import { sha256 } from "@noble/hashes/sha2";
 import { blake3 } from "@noble/hashes/blake3";
+import { k12 } from "@noble/hashes/sha3-addons";
 import { swapEndianness } from "@bitauth/libauth";
 import { Work, AlgorithmId } from "./types";
 import {
@@ -25,6 +26,8 @@ import sha256dShaderText from "./shaders/sha256d.wgsl?raw";
 import blake3ShaderText from "./shaders/blake3.wgsl?raw";
 import k12ShaderText from "./shaders/k12.wgsl?raw";
 
+const NONCE_BYTES = 4;
+
 function signedToHex(number: number) {
   let value = Math.max(-2147483648, Math.min(2147483647, number));
   if (value < 0) {
@@ -33,22 +36,73 @@ function signedToHex(number: number) {
   return value.toString(16).padStart(8, "0");
 }
 
-// Map algorithm ID number to AlgorithmId string
+// Map algorithm ID number to AlgorithmId string (0/1/2 only for now)
 function mapAlgorithmId(algoId: number): AlgorithmId {
   switch (algoId) {
     case 0x00: return 'sha256d';
     case 0x01: return 'blake3';
     case 0x02: return 'k12';
-    case 0x03: return 'argon2light';
-    case 0x04: return 'randomx-light';
     default: return 'sha256d';
+  }
+}
+
+export function extractCodeScriptHashOp(codeScript?: string): "aa" | "ee" | "ef" | undefined {
+  if (!codeScript) return;
+  const match = codeScript
+    .toLowerCase()
+    .match(/7ea87e5a7a7e(aa|ee|ef)bc01147f/);
+  return match?.[1] as "aa" | "ee" | "ef" | undefined;
+}
+
+export function mapHashOpToAlgorithm(hashOp?: "aa" | "ee" | "ef"): AlgorithmId | undefined {
+  switch (hashOp) {
+    case "aa": return "sha256d";
+    case "ee": return "blake3";
+    case "ef": return "k12";
+    default: return;
   }
 }
 
 // Get algorithm - checks v2 glyph payload first, then falls back to contract (from API)
 function getAlgorithm(): AlgorithmId {
-  // First check v2 glyph payload for dmint.algo
   const payload = glyph.value?.payload;
+  const payloadAlgoId = (payload?.dmint as { algo?: number } | undefined)?.algo;
+  const payloadAlgo =
+    typeof payloadAlgoId === "number" ? mapAlgorithmId(payloadAlgoId) : undefined;
+
+  const hashOp = extractCodeScriptHashOp(contract.value?.codeScript);
+  const codeScriptAlgo = mapHashOpToAlgorithm(hashOp);
+  const contractAlgo = contract.value?.algorithm;
+
+  console.debug("Mining sanity check", {
+    payloadAlgoId,
+    payloadAlgo,
+    codeScriptHashOp: hashOp,
+    codeScriptAlgo,
+    contractAlgo,
+  });
+
+  if (codeScriptAlgo) {
+    if (payloadAlgo && payloadAlgo !== codeScriptAlgo) {
+      console.warn(
+        `Payload algo mismatch: payload=${payloadAlgo} codeScript=${codeScriptAlgo}. Using codeScript algo.`
+      );
+    }
+    if (contractAlgo && contractAlgo !== codeScriptAlgo) {
+      console.warn(
+        `Contract/API algo mismatch: contract=${contractAlgo} codeScript=${codeScriptAlgo}. Using codeScript algo.`
+      );
+    }
+    return codeScriptAlgo;
+  }
+
+  // Prefer contract/API algorithm metadata when codeScript opcode is unavailable.
+  if (contractAlgo) {
+    console.log("Using algorithm from contract/API:", contractAlgo);
+    return contractAlgo;
+  }
+
+  // First check v2 glyph payload for dmint.algo
   if (payload) {
     // Check for v2 version field
     const isV2 = payload.v === 2;
@@ -64,13 +118,6 @@ function getAlgorithm(): AlgorithmId {
     if (isV2) {
       console.log("v2 glyph without dmint.algo, checking contract");
     }
-  }
-  
-  // Fall back to contract algorithm (set by blockchain.ts from dmint API)
-  const algo = contract.value?.algorithm;
-  if (algo) {
-    console.log("Using algorithm from contract/API:", algo);
-    return algo;
   }
   
   console.log("No algorithm found, defaulting to sha256d");
@@ -163,7 +210,7 @@ function partialHash(data: Uint8Array) {
 }
 
 function verify(target: bigint, partialPreimage: Uint8Array, nonce: string) {
-  const preimage = new Uint8Array(partialPreimage.byteLength + 8);
+  const preimage = new Uint8Array(partialPreimage.byteLength + NONCE_BYTES);
   preimage.set(partialPreimage);
   preimage.set(hexToBytes(nonce), 64);
 
@@ -180,8 +227,24 @@ function verify(target: bigint, partialPreimage: Uint8Array, nonce: string) {
   return num < target;
 }
 
+function verifyK12(target: bigint, partialPreimage: Uint8Array, nonce: string) {
+  const preimage = new Uint8Array(partialPreimage.byteLength + NONCE_BYTES);
+  preimage.set(partialPreimage);
+  preimage.set(hexToBytes(nonce), 64);
+
+  const hash = k12(preimage, { dkLen: 32 });
+
+  if (hash[0] !== 0 || hash[1] !== 0 || hash[2] !== 0 || hash[3] !== 0) {
+    return false;
+  }
+
+  const view = new DataView(hash.slice(4, 12).buffer, 0);
+  const num = view.getBigUint64(0, false);
+  return num < target;
+}
+
 function verifyBlake3(target: bigint, partialPreimage: Uint8Array, nonce: string) {
-  const preimage = new Uint8Array(partialPreimage.byteLength + 8);
+  const preimage = new Uint8Array(partialPreimage.byteLength + NONCE_BYTES);
   preimage.set(partialPreimage);
   preimage.set(hexToBytes(nonce), 64);
 
@@ -227,6 +290,19 @@ const start = async () => {
   if (!work) return;
   
   const algorithm: AlgorithmId = (work as any).algorithm || 'sha256d';
+  const codeScriptHashOp = extractCodeScriptHashOp(contract.value?.codeScript);
+  const codeScriptAlgo = mapHashOpToAlgorithm(codeScriptHashOp);
+  if (codeScriptAlgo && algorithm !== codeScriptAlgo) {
+    console.error(
+      `Preflight failed: mining algorithm ${algorithm} mismatches codeScript opcode ${codeScriptHashOp} (${codeScriptAlgo})`
+    );
+    addMessage({
+      type: "general",
+      msg: `Mining blocked: algorithm mismatch (${algorithm} vs contract ${codeScriptAlgo})`,
+    });
+    miningStatus.value = "stop";
+    return;
+  }
   const useV2Layout = isV2ShaderLayout(algorithm);
   
   let midstate = powMidstate(work);
@@ -265,7 +341,7 @@ const start = async () => {
     const midstateSize = 64;
     const targetSize = 12; // 3 u32s (pad, high, low)
     const resultsSize = 256 * 16; // 256 vec4<u32>
-    const nonceSize = 8; // 2 u32s (low offset + high nonce)
+    const nonceSize = 4; // 1 u32 nonce offset
 
     const midstateBuffer = device.createBuffer({
       label: "midstate buffer", size: midstateSize,
@@ -309,7 +385,6 @@ const start = async () => {
     device.queue.writeBuffer(targetBuffer, 0, new Uint32Array([0, targetHigh, targetLow]));
 
     let nonceStart = 0;
-    let nonce1 = Math.round(Math.random() * 0xffffffff);
     let startTime = Date.now();
     const maxNonce = 0xffffffff - numInvocations;
 
@@ -317,17 +392,13 @@ const start = async () => {
       if (nonceStart > maxNonce) {
         hashrate.value = (nonceStart / (Date.now() - startTime)) * 1000;
         nonceStart = 0;
-        nonce1++;
-        if (nonce1 > 0xffffffff) {
-          nonce1 = 0;
-        }
         startTime = Date.now();
       }
 
       // Clear results counter
       device.queue.writeBuffer(resultsBuffer, 0, new Uint32Array([0, 0, 0, 0]));
-      // Write nonce offset (low) + high nonce counter
-      device.queue.writeBuffer(nonceOffsetBuffer, 0, new Uint32Array([nonceStart, nonce1]));
+      // Write nonce offset
+      device.queue.writeBuffer(nonceOffsetBuffer, 0, new Uint32Array([nonceStart]));
 
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginComputePass();
@@ -344,10 +415,14 @@ const start = async () => {
       if (resultCount > 0) {
         // First result at flat offset 4: [nonce, hash0, hash1, flag]
         const foundNonceVal = range[4];
-        // GPU stores nonce as LE u32 — convert to LE hex bytes for CPU verify & on-chain claim
-        const nonceHex = swapEndianness(foundNonceVal.toString(16).padStart(8, "0")) + swapEndianness(nonce1.toString(16).padStart(8, "0"));
+        const nonceHex = swapEndianness(foundNonceVal.toString(16).padStart(8, "0"));
         // CPU-side verification before submitting
-        const verifyFn = algorithm === 'blake3' ? verifyBlake3 : verify;
+        const verifyFn =
+          algorithm === 'blake3'
+            ? verifyBlake3
+            : algorithm === 'k12'
+              ? verifyK12
+              : verify;
         if (verifyFn(work.target, midstate.preimage, nonceHex)) {
           console.log(`${algorithm} solution verified, nonce: ${nonceHex}`);
           foundNonce(nonceHex);
@@ -401,7 +476,6 @@ const start = async () => {
     });
 
     let nonceStart = 0;
-    let nonce1 = Math.round(Math.random() * 0xffffffff);
     let startTime = Date.now();
     const maxNonce = 0xffffffff - numInvocations;
 
@@ -411,14 +485,10 @@ const start = async () => {
       if (nonceStart > maxNonce) {
         hashrate.value = (nonceStart / (Date.now() - startTime)) * 1000;
         nonceStart = 0;
-        nonce1++;
-        if (nonce1 > 0xffffffff) {
-          nonce1 = 0;
-        }
         startTime = Date.now();
       }
       device.queue.writeBuffer(
-        nonceBuffer, 0, new Uint32Array([nonce1, nonceStart])
+        nonceBuffer, 0, new Uint32Array([0, nonceStart])
       );
 
       const encoder = device.createCommandEncoder({ label: "pow encoder" });
@@ -434,7 +504,7 @@ const start = async () => {
       const range = new Uint8Array(gpuReadBuffer.getMappedRange());
       const result = bytesToHex(range.slice(0, 4));
       if (result !== "00000000") {
-        const nonceHex = `${nonce1.toString(16).padStart(8, "0")}${swapEndianness(result)}`;
+        const nonceHex = swapEndianness(result);
         if (verify(work.target, midstate.preimage, nonceHex)) {
           console.log("Verified", nonceHex);
           foundNonce(nonceHex);

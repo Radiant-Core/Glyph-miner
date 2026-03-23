@@ -40,19 +40,19 @@ describe('Endianness Verification', () => {
     
     // Byte-swap to convert LE u32 to BE for comparison
     const bswap = (x: number) => {
-      return ((x & 0xFF) << 24) |
-             ((x & 0xFF00) << 8) |
-             ((x >> 8) & 0xFF00) |
-             (x >> 24);
+      return (((x & 0xFF) << 24) |
+              ((x & 0xFF00) << 8) |
+              ((x >>> 8) & 0xFF00) |
+              (x >>> 24)) >>> 0;
     };
     
-    const gpuHash1BE = bswap(gpuHash[1]);
-    const gpuHash2BE = bswap(gpuHash[2]);
+    const gpuHash1BE = bswap(gpuHash[1]) >>> 0;
+    const gpuHash2BE = bswap(gpuHash[2]) >>> 0;
     console.log('GPU hash[1] byte-swapped:', gpuHash1BE.toString(16));
     console.log('GPU hash[2] byte-swapped:', gpuHash2BE.toString(16));
 
     // Reconstruct big-endian u64 from byte-swapped u32s
-    const reconstructed = (BigInt(gpuHash1BE) << 32n) | BigInt(gpuHash2BE >>> 0);
+    const reconstructed = (BigInt(gpuHash1BE) << 32n) | BigInt(gpuHash2BE);
     console.log('Reconstructed BE u64:', reconstructed.toString(16));
     
     expect(reconstructed).toBe(cpuBytes4to11);

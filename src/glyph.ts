@@ -247,7 +247,7 @@ export function burnScript(ref: string) {
 
 export function parseDmintScript(script: string): string {
   const pattern =
-    /^(.*)bd5175c0c855797ea8597959797ea87e5a7a7eaabc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551$/;
+    /^(.*)bd5175c0c855797ea8597959797ea87e5a7a7e(?:aa|ee|ef)bc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551$/;
   const [, stateScript] = script.match(pattern) || [];
   return stateScript;
 }
@@ -276,7 +276,7 @@ export function parseMessageScript(script: string): string {
 }
 
 export async function parseContractTx(tx: Transaction, ref: string) {
-  const stateScripts: [number, string][] = [];
+  const stateScripts: [number, string, string][] = [];
   const burns: string[] = [];
   const messages: string[] = [];
 
@@ -284,7 +284,8 @@ export async function parseContractTx(tx: Transaction, ref: string) {
     const hex = o.script.toHex();
     const dmint = parseDmintScript(hex);
     if (dmint) {
-      return stateScripts.push([i, dmint]);
+      const codeScript = hex.substring(dmint.length + 2);
+      return stateScripts.push([i, dmint, codeScript]);
     }
 
     const burn = parseBurnScript(hex);
@@ -307,7 +308,7 @@ export async function parseContractTx(tx: Transaction, ref: string) {
   // State script:
   // height OP_PUSHINPUTREF contractRef OP_PUSHINPUTREF tokenRef maxHeight reward target
   const contracts = stateScripts
-    .map(([outputIndex, script]) => {
+    .map(([outputIndex, script, codeScript]) => {
       const opcodes = Script.fromHex(script).toASM().split(" ");
       const [op1, contractRef] = opcodes.splice(1, 2);
       const [op2, tokenRef] = opcodes.splice(1, 2);
@@ -338,6 +339,7 @@ export async function parseContractTx(tx: Transaction, ref: string) {
           reward,
           target,
           script,
+          codeScript,
           message,
         },
       };
