@@ -1,5 +1,6 @@
 import { connect } from "./client";
 import {
+  autoReseed,
   contractsUrl,
   hideMessages,
   mineToAddress,
@@ -32,6 +33,8 @@ contractsUrl.value =
   "https://glyph-miner.com/contracts.json";
 // Default to using RXinDexer API (true unless explicitly disabled)
 useIndexerApi.value = localStorage.getItem("useIndexerApi") !== "";
+// Default to enabled unless explicitly disabled
+autoReseed.value = localStorage.getItem("autoReseed") !== "";
 
 // If servers isn't saved then set to default servers, randomly sorted
 // Also ensure any new default servers are added to stored list

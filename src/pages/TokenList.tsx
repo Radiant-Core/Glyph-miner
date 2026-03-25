@@ -3,7 +3,8 @@ import { changeToken } from "../blockchain";
 import {
   Box, Button, Center, CircularProgress, Container, Flex, Heading,
   Icon, IconButton, Image, Input, InputGroup, InputLeftElement,
-  Table, Tbody, Td, Th, Thead, Tr, Text, Tooltip,
+  Select,
+  Table, Tbody, Td, Th, Thead, Tr, Text,
 } from "@chakra-ui/react";
 import { SearchIcon, TriangleDownIcon, TriangleUpIcon, CloseIcon } from "@chakra-ui/icons";
 import { FaQuestionCircle } from "react-icons/fa";
@@ -13,43 +14,16 @@ import { deriveSubContractRef } from "../utils";
 import { miningEnabled, miningStatus, selectedContract } from "../signals";
 import miner from "../miner";
 import { addMessage } from "../message";
-import { fetchContractSummaries, ContractSummaryItem } from "../deployments";
-import { MAX_TARGET } from "../pow";
+import {
+  fetchContractSummaries,
+  ContractSummaryItem,
+  enrichContractSummariesWithVerifiedCounts,
+} from "../deployments";
 import { fetchToken } from "../glyph";
+import { getAlgorithmName } from "../glyph";
 
-type SortField = "ticker" | "claimed" | "contracts" | "reward" | "difficulty";
+type SortField = "ticker" | "algorithm" | "claimed" | "contracts" | "reward";
 type SortDir = "asc" | "desc";
-
-const DAA_MODE_FIXED = 0;
-
-/**
- * Format difficulty for display.
- * For fixed DAA: compute human-readable difficulty from raw target.
- * The API's "difficulty" field is actually the raw on-chain target value.
- */
-function computeDifficulty(item: ContractSummaryItem): string {
-  if (item.daaMode !== DAA_MODE_FIXED) {
-    return item.daaModeName || "Variable";
-  }
-  if (!item.difficulty || item.difficulty <= 0) return "—";
-  try {
-    const target = BigInt(Math.floor(item.difficulty));
-    if (target <= 0n) return "—";
-    const diff = MAX_TARGET / target;
-    return fmtDiff(Number(diff));
-  } catch {
-    return fmtDiff(item.difficulty);
-  }
-}
-
-function fmtDiff(d: number): string {
-  if (d >= 1e15) return (d / 1e15).toFixed(1) + "P";
-  if (d >= 1e12) return (d / 1e12).toFixed(1) + "T";
-  if (d >= 1e9) return (d / 1e9).toFixed(1) + "G";
-  if (d >= 1e6) return (d / 1e6).toFixed(1) + "M";
-  if (d >= 1e3) return (d / 1e3).toFixed(1) + "K";
-  return d.toFixed(0);
-}
 
 /**
  * Build a blob URL from hex-encoded icon data and MIME type.
@@ -108,7 +82,7 @@ function TokenIcon({ iconType, iconData, iconUrl }: {
   return <Icon as={FaQuestionCircle} boxSize={5} color="gray.500" />;
 }
 
-function SummaryRow({ item }: { item: ContractSummaryItem }) {
+function SummaryRow({ item, showContracts }: { item: ContractSummaryItem; showContracts: boolean }) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
 
@@ -117,7 +91,7 @@ function SummaryRow({ item }: { item: ContractSummaryItem }) {
     try {
       // Derive sub-contract refs from token ref (big-endian 72-char format)
       // changeToken and fetchToken both expect big-endian refs
-      const numToTry = Math.min(item.outputs || 1, 64);
+      const numToTry = 64;
       let loaded = false;
 
       for (let i = 0; i < numToTry; i++) {
@@ -182,13 +156,9 @@ function SummaryRow({ item }: { item: ContractSummaryItem }) {
           {item.percentMined.toFixed(2)}%
         </Box>
       </Td>
-      <Td isNumeric>{item.outputs}</Td>
+      <Td>{getAlgorithmName(item.algorithm)}</Td>
+      {showContracts && <Td isNumeric>{item.contractCount?.toLocaleString()}</Td>}
       <Td isNumeric>{item.reward.toLocaleString()}</Td>
-      <Td isNumeric fontFamily="Source Code Pro Variable, monospace">
-        <Tooltip label={item.daaMode !== DAA_MODE_FIXED ? `DAA: ${item.daaModeName}` : `Target: ${item.difficulty}`} fontSize="xs">
-          <Text as="span">{computeDifficulty(item)}</Text>
-        </Tooltip>
-      </Td>
       <Td isNumeric>
         <Button
           size="xs"
@@ -231,16 +201,18 @@ function SortTh({ label, field, cur, dir, onSort, isNumeric = false }: {
 
 function sortVal(item: ContractSummaryItem, f: SortField): number | string {
   if (f === "ticker") return item.ticker.toLowerCase();
+  if (f === "algorithm") return getAlgorithmName(item.algorithm).toLowerCase();
   if (f === "claimed") return item.percentMined;
-  if (f === "contracts") return item.outputs;
+  if (f === "contracts") return item.contractCount ?? -1;
   if (f === "reward") return item.reward;
-  return item.difficulty;
+  return item.reward;
 }
 
 export default function TokenList() {
   const [items, setItems] = useState<ContractSummaryItem[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [algorithm, setAlgorithm] = useState("all");
   const [sf, setSf] = useState<SortField>("ticker");
   const [sd, setSd] = useState<SortDir>("asc");
 
@@ -248,7 +220,8 @@ export default function TokenList() {
     setLoading(true);
     setItems(null);
     const data = await fetchContractSummaries();
-    setItems(data);
+    const enriched = await enrichContractSummariesWithVerifiedCounts(data);
+    setItems(enriched);
     setLoading(false);
   }, []);
 
@@ -265,6 +238,12 @@ export default function TokenList() {
     });
   }, []);
 
+  const algorithmOptions = useMemo(() => {
+    if (!items) return [] as Array<[number, string]>;
+    return [...new Map(items.map(item => [item.algorithm, getAlgorithmName(item.algorithm)] as [number, string])).entries()]
+      .sort((a, b) => a[0] - b[0]);
+  }, [items]);
+
   const filtered = useMemo(() => {
     if (!items) return null;
     const q = search.toLowerCase().trim();
@@ -272,8 +251,15 @@ export default function TokenList() {
       ? items.filter(i =>
           i.ticker.toLowerCase().includes(q) ||
           i.name.toLowerCase().includes(q) ||
+          getAlgorithmName(i.algorithm).toLowerCase().includes(q) ||
           i.ref.includes(q))
       : [...items];
+
+    if (algorithm !== "all") {
+      const algoId = Number(algorithm);
+      list = list.filter(i => i.algorithm === algoId);
+    }
+
     list.sort((a, b) => {
       const av = sortVal(a, sf);
       const bv = sortVal(b, sf);
@@ -281,7 +267,12 @@ export default function TokenList() {
       return sd === "asc" ? cmp : -cmp;
     });
     return list;
-  }, [items, search, sf, sd]);
+  }, [items, search, algorithm, sf, sd]);
+
+  const showContractsColumn = useMemo(() => {
+    if (!filtered || filtered.length === 0) return false;
+    return filtered.every((item) => typeof item.contractCount === "number");
+  }, [filtered]);
 
   return (
     <>
@@ -327,14 +318,29 @@ export default function TokenList() {
 
       <Container maxW="container.lg" py={6} px={{ base: 2, md: 0 }}>
         <Box mb={4}>
-          <InputGroup maxW="360px">
-            <InputLeftElement pointerEvents="none">
-              <SearchIcon color="gray.500" />
-            </InputLeftElement>
-            <Input
-              placeholder="Search by name or ID..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
+          <Flex gap={3} direction={{ base: "column", md: "row" }} align={{ base: "stretch", md: "center" }}>
+            <InputGroup maxW={{ base: "100%", md: "360px" }}>
+              <InputLeftElement pointerEvents="none">
+                <SearchIcon color="gray.500" />
+              </InputLeftElement>
+              <Input
+                placeholder="Search by name, algo, or ID..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                bg="bg.100"
+                border="1px solid"
+                borderColor="whiteAlpha.100"
+                _focus={{ borderColor: "lightGreen.A400", bg: "bg.50" }}
+                size="sm"
+                borderRadius="lg"
+                h="40px"
+              />
+            </InputGroup>
+
+            <Select
+              value={algorithm}
+              onChange={e => setAlgorithm(e.target.value)}
+              maxW={{ base: "100%", md: "220px" }}
               bg="bg.100"
               border="1px solid"
               borderColor="whiteAlpha.100"
@@ -342,8 +348,13 @@ export default function TokenList() {
               size="sm"
               borderRadius="lg"
               h="40px"
-            />
-          </InputGroup>
+            >
+              <option value="all">All Algorithms</option>
+              {algorithmOptions.map(([id, label]) => (
+                <option key={id} value={id.toString()}>{label}</option>
+              ))}
+            </Select>
+          </Flex>
         </Box>
 
         <Box
@@ -360,15 +371,17 @@ export default function TokenList() {
                 <SortTh label="Name" field="ticker" cur={sf} dir={sd} onSort={onSort} />
                 <Th>ID</Th>
                 <SortTh label="Claimed" field="claimed" cur={sf} dir={sd} onSort={onSort} isNumeric />
-                <SortTh label="Contracts" field="contracts" cur={sf} dir={sd} onSort={onSort} isNumeric />
+                <SortTh label="Algo" field="algorithm" cur={sf} dir={sd} onSort={onSort} />
+                {showContractsColumn && (
+                  <SortTh label="Contracts" field="contracts" cur={sf} dir={sd} onSort={onSort} isNumeric />
+                )}
                 <SortTh label="Reward" field="reward" cur={sf} dir={sd} onSort={onSort} isNumeric />
-                <SortTh label="Difficulty" field="difficulty" cur={sf} dir={sd} onSort={onSort} isNumeric />
                 <Th></Th>
               </Tr>
             </Thead>
             <Tbody>
               {filtered && filtered.map(item => (
-                <SummaryRow key={item.ref} item={item} />
+                <SummaryRow key={item.ref} item={item} showContracts={showContractsColumn} />
               ))}
             </Tbody>
           </Table>

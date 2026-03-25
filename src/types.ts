@@ -56,6 +56,9 @@ export type Contract = {
   maxHeight: bigint;
   reward: bigint;
   target: bigint;
+  algoId?: bigint;
+  lastTime?: bigint;
+  targetTime?: bigint;
   script: string;
   codeScript?: string;
   message: string;

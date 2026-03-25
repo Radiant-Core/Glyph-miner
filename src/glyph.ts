@@ -326,7 +326,11 @@ export async function parseContractTx(tx: Transaction, ref: string) {
         return;
       }
 
-      const [height, maxHeight, reward, target] = numbers as bigint[];
+      const [height, maxHeight, reward, target, v5, v6, v7] = numbers as bigint[];
+      const hasAlgoId = numbers.length >= 7;
+      const algoId = hasAlgoId ? v5 : undefined;
+      const lastTime = hasAlgoId ? v6 : v5;
+      const targetTime = hasAlgoId ? v7 : v6;
       return {
         state: "active",
         params: {
@@ -338,6 +342,9 @@ export async function parseContractTx(tx: Transaction, ref: string) {
           maxHeight,
           reward,
           target,
+          algoId,
+          lastTime,
+          targetTime,
           script,
           codeScript,
           message,

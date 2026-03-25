@@ -2,8 +2,8 @@
  * dMint Contracts API Client
  * 
  * Fetches mineable dMint contracts from RXinDexer via Electrum protocol.
- * Provides both simple format (backward compatible) and extended format
- * with profitability sorting and algorithm filtering.
+ * Uses dmint.get_contracts v2 request/response contract and maps to
+ * local ExtendedContract shape for existing UI consumers.
  */
 
 import { client } from "./client";
@@ -55,12 +55,133 @@ export interface ExtendedContract {
   mined_supply?: number;
 }
 
+export interface DmintV2TokenSummaryItem {
+  token_ref: string;
+  ticker?: string;
+  name?: string;
+  algorithm: { id: number; name?: string };
+  daa_mode?: { id: number; name?: string };
+  contracts?: {
+    total?: number;
+    mineable_remaining?: number | null;
+    fully_mined?: number | null;
+  };
+  supply?: {
+    total?: string;
+    minted?: string;
+    remaining?: string;
+    unit?: string;
+  };
+  reward_per_mint?: string;
+  target?: string;
+  percent_mined?: number;
+  deploy_height?: number;
+  active?: boolean;
+  is_fully_mined?: boolean;
+  icon?: {
+    type?: string | null;
+    url?: string | null;
+    data_hex?: string | null;
+  };
+}
+
+export interface DmintV2ContractsRequest {
+  version: 2;
+  view: "token_summary";
+  filters?: {
+    status?: "mineable" | "finished" | "all";
+    algorithm_ids?: number[];
+  };
+  sort?: {
+    field?: "deploy_height" | "ticker" | "reward_per_mint" | "percent_mined" | "mineable_contracts_remaining" | "total_contracts";
+    dir?: "asc" | "desc";
+  };
+  pagination?: {
+    limit?: number;
+    cursor?: string | null;
+  };
+}
+
+export interface DmintV2ContractsResponse {
+  version: 2;
+  view: "token_summary";
+  schema: string;
+  generated_at: string;
+  indexed_height: number;
+  cursor_next?: string | null;
+  count: number;
+  total_estimate: number;
+  items: DmintV2TokenSummaryItem[];
+}
+
 export interface ExtendedContractsResponse {
   version: number;
   updated_at: string;
   updated_height: number;
   count: number;
   contracts: ExtendedContract[];
+}
+
+function parseIntString(value: string | undefined): number {
+  if (!value) return 0;
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function mapV2ItemToExtended(item: DmintV2TokenSummaryItem): ExtendedContract {
+  const totalSupply = parseIntString(item.supply?.total);
+  const minedSupply = parseIntString(item.supply?.minted);
+  const percentMined =
+    typeof item.percent_mined === "number"
+      ? item.percent_mined
+      : totalSupply > 0
+        ? (minedSupply / totalSupply) * 100
+        : 0;
+
+  return {
+    ref: item.token_ref,
+    outputs: item.contracts?.total ?? 0,
+    ticker: item.ticker,
+    name: item.name,
+    algorithm: item.algorithm?.id ?? 0,
+    difficulty: parseIntString(item.target),
+    reward: parseIntString(item.reward_per_mint),
+    percent_mined: percentMined,
+    active: item.active ?? !item.is_fully_mined,
+    deploy_height: item.deploy_height ?? 0,
+    daa_mode: item.daa_mode?.id ?? 0,
+    daa_mode_name: item.daa_mode?.name,
+    icon_type: item.icon?.type ?? undefined,
+    icon_data: item.icon?.data_hex ?? undefined,
+    icon_url: item.icon?.url ?? undefined,
+    total_supply: totalSupply,
+    mined_supply: minedSupply,
+  };
+}
+
+function toExtendedResponse(result: unknown): ExtendedContractsResponse | null {
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+
+  const candidate = result as Record<string, unknown>;
+
+  if (Array.isArray(candidate.contracts)) {
+    return candidate as unknown as ExtendedContractsResponse;
+  }
+
+  if (Array.isArray(candidate.items)) {
+    const v2 = candidate as unknown as DmintV2ContractsResponse;
+    return {
+      version: 2,
+      updated_at: v2.generated_at,
+      updated_height: v2.indexed_height,
+      count: v2.count,
+      contracts: v2.items.map(mapV2ItemToExtended),
+    };
+  }
+
+  return null;
 }
 
 // Algorithm IDs aligned with Glyph dMint v2
@@ -71,12 +192,18 @@ export const DMINT_ALGORITHM = {
 } as const;
 
 /**
- * Fetch contracts in simple format: [[ref, outputs], ...]
- * This is backward compatible with the static contracts.json format.
+ * Fetch contracts in simple tuple format: [[ref, outputs], ...]
+ * Derived from dmint.get_contracts v2 token summary response.
  */
 export async function fetchContractsSimple(): Promise<[string, number][]> {
   try {
-    const result = await client.request("dmint.get_contracts", "simple");
+    const request: DmintV2ContractsRequest = {
+      version: 2,
+      view: "token_summary",
+      filters: { status: "all" },
+      pagination: { limit: 5000 },
+    };
+    const result = await client.request("dmint.get_contracts", request as unknown as string);
     
     // Handle error response
     if (result && typeof result === 'object' && 'error' in result) {
@@ -84,7 +211,12 @@ export async function fetchContractsSimple(): Promise<[string, number][]> {
       return [];
     }
     
-    return result as [string, number][];
+    const response = toExtendedResponse(result);
+    if (!response?.contracts?.length) {
+      return [];
+    }
+
+    return response.contracts.map((c) => [c.ref, c.outputs]);
   } catch (error) {
     console.warn("Failed to fetch contracts from API:", error);
     return [];
@@ -100,7 +232,15 @@ export async function fetchContractsExtended(): Promise<ExtendedContractsRespons
   }
 
   try {
-    const result = await client.request("dmint.get_contracts", "extended");
+    const request: DmintV2ContractsRequest = {
+      version: 2,
+      view: "token_summary",
+      filters: { status: "mineable" },
+      sort: { field: "deploy_height", dir: "desc" },
+      pagination: { limit: 5000 },
+    };
+
+    const result = await client.request("dmint.get_contracts", request as unknown as string);
     
     // Handle error response
     if (result && typeof result === 'object' && 'error' in result) {
@@ -119,7 +259,11 @@ export async function fetchContractsExtended(): Promise<ExtendedContractsRespons
       return null;
     }
 
-    const response = result as ExtendedContractsResponse;
+    const response = toExtendedResponse(result);
+    if (!response) {
+      console.warn("dMint API returned unexpected contracts response shape");
+      return null;
+    }
     getContractsSupported = true;
     if (Array.isArray(response.contracts)) {
       indexExtendedContracts(response.contracts);
@@ -267,9 +411,16 @@ export async function fetchMostProfitable(limit: number = 10): Promise<ExtendedC
  */
 export async function isDmintApiAvailable(): Promise<boolean> {
   try {
-    // Try a simple request - if it returns data or a proper error, API is available
+    const request: DmintV2ContractsRequest = {
+      version: 2,
+      view: "token_summary",
+      filters: { status: "mineable" },
+      pagination: { limit: 1 },
+    };
+
+    // Try a minimal v2 request - if it returns data or a proper error, API is available
     const result = await Promise.race([
-      client.request("dmint.get_contracts", "simple"),
+      client.request("dmint.get_contracts", request as unknown as string),
       new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000))
     ]);
     

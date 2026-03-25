@@ -21,7 +21,13 @@ import {
 } from "./signals";
 import { addMessage } from "./message";
 import miner, { updateWork } from "./miner";
-import { reverseRef, scriptHash, deriveSubContractRef, push4bytes } from "./utils";
+import {
+  reverseRef,
+  scriptHash,
+  deriveSubContractRef,
+  push4bytes,
+  pushMinimal,
+} from "./utils";
 import { broadcast, client, fetchRef, fetchTx } from "./client";
 import { Contract, Work, Utxo, AlgorithmId } from "./types";
 import { FEE_PER_KB } from "./constants";
@@ -116,7 +122,76 @@ function findNonMinimalDataPush(scriptHex: string): string | undefined {
   return;
 }
 
-function buildNextContractScript(contract: Contract, newHeight: bigint): string {
+type NextContractState = {
+  script: string;
+  target: bigint;
+  lastTime?: bigint;
+};
+
+function computeAsertShiftTarget(
+  currentTarget: bigint,
+  lastTime: bigint,
+  targetTime: bigint,
+  nextTime: bigint
+): bigint {
+  if (targetTime <= 0n) {
+    return currentTarget;
+  }
+
+  const timeDelta = nextTime - lastTime;
+  const shiftAmount = (timeDelta - targetTime) / targetTime;
+  const clampedShift =
+    shiftAmount > 4n ? 4n : shiftAmount < -4n ? -4n : shiftAmount;
+
+  if (clampedShift > 0n) {
+    return currentTarget << clampedShift;
+  }
+  if (clampedShift < 0n) {
+    return currentTarget >> -clampedShift;
+  }
+  return currentTarget;
+}
+
+function buildNextContractState(
+  contract: Contract,
+  newHeight: bigint
+): NextContractState {
+  const hasTimedDaaState =
+    typeof contract.lastTime === "bigint" &&
+    typeof contract.targetTime === "bigint";
+
+  if (hasTimedDaaState) {
+    const nextTime = BigInt(Math.floor(Date.now() / 1000));
+    const nextTarget = computeAsertShiftTarget(
+      contract.target,
+      contract.lastTime as bigint,
+      contract.targetTime as bigint,
+      nextTime
+    );
+
+    let nextStateScript =
+      `${push4bytes(Number(newHeight))}d8${contract.contractRef}d0${contract.tokenRef}` +
+      `${pushMinimal(contract.maxHeight)}${pushMinimal(contract.reward)}${pushMinimal(
+        nextTarget
+      )}`;
+
+    if (typeof contract.algoId === "bigint") {
+      nextStateScript += pushMinimal(contract.algoId);
+    }
+
+    nextStateScript += `${push4bytes(Number(nextTime))}${pushMinimal(
+      contract.targetTime as bigint
+    )}`;
+
+    return {
+      script: contract.codeScript
+        ? `${nextStateScript}bd${contract.codeScript}`
+        : nextStateScript,
+      target: nextTarget,
+      lastTime: nextTime,
+    };
+  }
+
   // contract.script stores the mutable state section. Replace only the first
   // 4-byte height push and preserve the rest exactly as-is.
   const nextStateScript = `${push4bytes(Number(newHeight))}${contract.script.substring(10)}`;
@@ -124,14 +199,17 @@ function buildNextContractScript(contract: Contract, newHeight: bigint): string 
   // If codeScript was parsed from chain, preserve it exactly so algorithm/DAA
   // specific bytecode remains unchanged.
   if (contract.codeScript) {
-    return `${nextStateScript}bd${contract.codeScript}`;
+    return { script: `${nextStateScript}bd${contract.codeScript}`, target: contract.target };
   }
 
   // Legacy fallback for older parsed contracts without codeScript.
-  return dMintScript({
-    ...contract,
-    height: newHeight,
-  });
+  return {
+    script: dMintScript({
+      ...contract,
+      height: newHeight,
+    }),
+    target: contract.target,
+  };
 }
 
 async function claimTokens(
@@ -139,7 +217,11 @@ async function claimTokens(
   work: Work,
   nonce: string
 ): Promise<
-  { success: true; txid: string } | { success: false; error?: ClaimError }
+  {
+    success: true;
+    txid: string;
+    nextContractState?: { target: bigint; lastTime?: bigint };
+  } | { success: false; error?: ClaimError }
 > {
   if (!wallet.value) return { success: false };
 
@@ -183,9 +265,8 @@ async function claimTokens(
     return { success: false, error: ClaimError.MISSING_INPUTS };
   }
 
-  const scriptSig = Script.fromASM(
-    `${nonceForScriptSig} ${inputScriptHash} ${outputScriptHash} 0`
-  );
+  const scriptSigHex = `04${nonceForScriptSig}20${inputScriptHash}20${outputScriptHash}00`;
+  const scriptSig = Script.fromHex(scriptSigHex);
 
   const tx = new Transaction();
   tx.feePerKb(FEE_PER_KB);
@@ -221,6 +302,10 @@ async function claimTokens(
     });
   });
 
+  const nextContractState = !lastMint
+    ? buildNextContractState(contract, newHeight)
+    : undefined;
+
   if (lastMint) {
     const burn = burnScript(contract.contractRef);
     tx.addOutput(
@@ -230,7 +315,7 @@ async function claimTokens(
       })
     );
   } else {
-    const dmint = buildNextContractScript(contract, newHeight);
+    const dmint = nextContractState?.script;
     tx.addOutput(
       new Transaction.Output({
         satoshis: 1,
@@ -253,6 +338,11 @@ async function claimTokens(
       script: bytesToHex(work.outputScript),
     })
   );
+
+  if (typeof nextContractState?.lastTime === "bigint") {
+    tx.lockUntilDate(Number(nextContractState.lastTime));
+  }
+
   tx.change(wallet.value.address);
   tx.sign(privKey);
   tx.seal();
@@ -274,9 +364,13 @@ async function claimTokens(
     algorithm: work.algorithm || contract.algorithm || codeScriptAlgo,
     codeScriptHashOp,
     target: contract.target.toString(),
+    nextTarget: nextContractState?.target?.toString(),
+    nextLastTime: nextContractState?.lastTime?.toString(),
+    txLockTime: tx.getLockTime(),
     contractLocation: contract.location,
     contractOutputIndex: contract.outputIndex,
     scriptSigAsm,
+    scriptSigHex,
     scriptSigPartCount: scriptSigParts.length,
     scriptSigNonceLen: scriptSigParts[0]?.length,
     scriptSigInputHashLen: scriptSigParts[1]?.length,
@@ -309,7 +403,16 @@ async function claimTokens(
     // Also update balance so low balance message can be shown if needed
     balance.value = utxos.value.reduce((a, { value }) => a + value, 0);
 
-    return { success: true, txid };
+    return {
+      success: true,
+      txid,
+      nextContractState: nextContractState
+        ? {
+            target: nextContractState.target,
+            lastTime: nextContractState.lastTime,
+          }
+        : undefined,
+    };
   } catch (exception) {
     console.debug("Broadcast failed", exception);
 
@@ -577,6 +680,8 @@ async function submit() {
         height,
         location: txid,
         outputIndex: 0,
+        target: result.nextContractState?.target ?? contract.value.target,
+        lastTime: result.nextContractState?.lastTime ?? contract.value.lastTime,
       };
       miningStatus.value = "change";
     }

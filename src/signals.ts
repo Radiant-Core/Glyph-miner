@@ -30,16 +30,17 @@ export const hideMessages = signal(false);
 export const contractsUrl = signal("");
 // Use RXinDexer dMint API for contract discovery (with fallback to contractsUrl)
 export const useIndexerApi = signal(true);
+// Automatically mutate work entropy when full nonce-space is exhausted
+export const autoReseed = signal(true);
 
 let timer = 0;
-let done = false;
+let mintTimeShown = false;
 
 effect(() => {
-  if (done) return;
-  if (miningStatus.value === "mining") {
+  if (miningStatus.value === "mining" && hashrate.value > 0 && !mintTimeShown) {
     timer = window.setTimeout(() => {
       if (contract.value) {
-        done = true;
+        mintTimeShown = true;
         addMessage({
           type: "mint-time",
           seconds: calcTimeToMine(contract.value.target, hashrate.value),
@@ -48,5 +49,8 @@ effect(() => {
     }, 10000);
   } else {
     clearTimeout(timer);
+    if (miningStatus.value !== "mining") {
+      mintTimeShown = false;
+    }
   }
 });

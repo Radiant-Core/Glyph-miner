@@ -6,10 +6,12 @@ import { k12 } from "@noble/hashes/sha3-addons";
 import { swapEndianness } from "@bitauth/libauth";
 import { Work, AlgorithmId } from "./types";
 import {
+  autoReseed,
   contract,
   found,
   glyph,
   hashrate,
+  miningEnabled,
   miningStatus,
   mintMessage,
   wallet,
@@ -27,6 +29,52 @@ import blake3ShaderText from "./shaders/blake3.wgsl?raw";
 import k12ShaderText from "./shaders/k12.wgsl?raw";
 
 const NONCE_BYTES = 4;
+const NONCE_SPACE_SIZE = 0x1_0000_0000;
+const MAX_MINT_MESSAGE_LENGTH = 80;
+let reseedRound = 0;
+
+function buildEntropyMessage(baseMessage: string, round: number) {
+  if (round <= 0) {
+    return baseMessage;
+  }
+
+  const tag = ` [r${round.toString(36)}]`;
+  const keepLength = Math.max(0, MAX_MINT_MESSAGE_LENGTH - tag.length);
+  return `${baseMessage.slice(0, keepLength)}${tag}`;
+}
+
+function currentWorkMessage() {
+  return buildEntropyMessage(mintMessage.value, reseedRound);
+}
+
+function stopAfterNonceSpaceExhausted(algorithm: AlgorithmId) {
+  addMessage({
+    type: "general",
+    msg: `Exhausted full 32-bit nonce space for ${algorithm} with current work. Change mint message or wait for next contract update.`,
+  });
+  miningEnabled.value = false;
+  addMessage({ type: "stop" });
+  miningStatus.value = "stop";
+}
+
+function tryAutoReseedWork(algorithm: AlgorithmId) {
+  if (!autoReseed.value) {
+    return;
+  }
+
+  reseedRound++;
+  updateWork({ notify: false });
+  const nextWork = workSignal.value;
+  if (!nextWork) {
+    return;
+  }
+
+  addMessage({
+    type: "general",
+    msg: `Nonce space exhausted for ${algorithm}. Auto-reseeded work entropy (round ${reseedRound}).`,
+  });
+  return nextWork;
+}
 
 function signedToHex(number: number) {
   let value = Math.max(-2147483648, Math.min(2147483647, number));
@@ -139,7 +187,9 @@ function isV2ShaderLayout(algorithm: AlgorithmId): boolean {
   return algorithm === 'blake3' || algorithm === 'k12';
 }
 
-export function updateWork() {
+export function updateWork(options?: { notify?: boolean }) {
+  const notify = options?.notify ?? true;
+
   if (!contract.value || !wallet.value?.address) {
     workSignal.value = undefined;
     return;
@@ -150,7 +200,9 @@ export function updateWork() {
   
   // Check if algorithm is supported
   if (!isAlgorithmSupported(algorithm)) {
-    addMessage({ type: "general", msg: `Unsupported algorithm: ${algorithm}` });
+    if (notify) {
+      addMessage({ type: "general", msg: `Unsupported algorithm: ${algorithm}` });
+    }
     miningStatus.value = "stop";
     return;
   }
@@ -159,8 +211,12 @@ export function updateWork() {
   const work = createWork(
     contract.value,
     wallet.value.address,
-    mintMessage.value
+    currentWorkMessage()
   );
+  if (!work) {
+    workSignal.value = undefined;
+    return;
+  }
   
   // Add algorithm to work object
   (work as any).algorithm = algorithm;
@@ -169,11 +225,13 @@ export function updateWork() {
   
   // Log algorithm info
   const algoInfo = ALGORITHMS[algorithm];
-  addMessage({ type: "general", msg: `Using ${algoInfo.name} algorithm` });
+  if (notify) {
+    addMessage({ type: "general", msg: `Using ${algoInfo.name} algorithm` });
+  }
   
   // Show collision warning if applicable
   const timeToMine = calcTimeToMine(Number(contract.value.target), algorithm, hashrate.value || undefined);
-  if (timeToMine < 30) {
+  if (notify && timeToMine < 30) {
     addMessage({ type: "general", msg: `Warning: Fast expected solve time (${timeToMine}s) may cause collisions` });
   }
 }
@@ -286,10 +344,12 @@ function powMidstate(work: Work) {
 
 const start = async () => {
   console.debug("miner.start called");
-  const work = workSignal.value;
-  if (!work) return;
+  reseedRound = 0;
+  updateWork({ notify: false });
+  let currentWork = workSignal.value;
+  if (!currentWork) return;
   
-  const algorithm: AlgorithmId = (work as any).algorithm || 'sha256d';
+  const algorithm: AlgorithmId = (currentWork as any).algorithm || 'sha256d';
   const codeScriptHashOp = extractCodeScriptHashOp(contract.value?.codeScript);
   const codeScriptAlgo = mapHashOpToAlgorithm(codeScriptHashOp);
   if (codeScriptAlgo && algorithm !== codeScriptAlgo) {
@@ -305,7 +365,7 @@ const start = async () => {
   }
   const useV2Layout = isV2ShaderLayout(algorithm);
   
-  let midstate = powMidstate(work);
+  let midstate = powMidstate(currentWork);
   miningStatus.value = "mining";
 
   const adapter = await (navigator as any).gpu?.requestAdapter({
@@ -380,19 +440,36 @@ const start = async () => {
     device.queue.writeBuffer(midstateBuffer, 0, midstate.preimage.slice(0, 64));
 
     // Write target as 3 u32s: [0, high32, low32]
-    const targetHigh = Number((work.target >> 32n) & 0xFFFFFFFFn);
-    const targetLow = Number(work.target & 0xFFFFFFFFn);
+    let targetHigh = Number((currentWork.target >> 32n) & 0xFFFFFFFFn);
+    let targetLow = Number(currentWork.target & 0xFFFFFFFFn);
     device.queue.writeBuffer(targetBuffer, 0, new Uint32Array([0, targetHigh, targetLow]));
 
     let nonceStart = 0;
     let startTime = Date.now();
-    const maxNonce = 0xffffffff - numInvocations;
+    const maxNonce = NONCE_SPACE_SIZE - numInvocations;
 
     while (miningStatus.value === "mining" || miningStatus.value === "change") {
       if (nonceStart > maxNonce) {
-        hashrate.value = (nonceStart / (Date.now() - startTime)) * 1000;
-        nonceStart = 0;
-        startTime = Date.now();
+        const elapsedMs = Date.now() - startTime;
+        if (elapsedMs > 0 && nonceStart > 0) {
+          hashrate.value = (nonceStart / elapsedMs) * 1000;
+        }
+
+        const reseededWork = tryAutoReseedWork(algorithm);
+        if (reseededWork) {
+          currentWork = reseededWork;
+          midstate = powMidstate(currentWork);
+          device.queue.writeBuffer(midstateBuffer, 0, midstate.preimage.slice(0, 64));
+          targetHigh = Number((currentWork.target >> 32n) & 0xFFFFFFFFn);
+          targetLow = Number(currentWork.target & 0xFFFFFFFFn);
+          device.queue.writeBuffer(targetBuffer, 0, new Uint32Array([0, targetHigh, targetLow]));
+          nonceStart = 0;
+          startTime = Date.now();
+          continue;
+        }
+
+        stopAfterNonceSpaceExhausted(algorithm);
+        break;
       }
 
       // Clear results counter
@@ -423,7 +500,7 @@ const start = async () => {
             : algorithm === 'k12'
               ? verifyK12
               : verify;
-        if (verifyFn(work.target, midstate.preimage, nonceHex)) {
+        if (verifyFn(currentWork.target, midstate.preimage, nonceHex)) {
           console.log(`${algorithm} solution verified, nonce: ${nonceHex}`);
           foundNonce(nonceHex);
           addMessage({ type: "found", nonce: nonceHex });
@@ -439,8 +516,13 @@ const start = async () => {
       if (miningStatus.value === "change") {
         updateWork();
         if (!workSignal.value) break;
-        midstate = powMidstate(workSignal.value);
+        currentWork = workSignal.value;
+        reseedRound = 0;
+        midstate = powMidstate(currentWork);
         device.queue.writeBuffer(midstateBuffer, 0, midstate.preimage.slice(0, 64));
+        targetHigh = Number((currentWork.target >> 32n) & 0xFFFFFFFFn);
+        targetLow = Number(currentWork.target & 0xFFFFFFFFn);
+        device.queue.writeBuffer(targetBuffer, 0, new Uint32Array([0, targetHigh, targetLow]));
         miningStatus.value = "mining";
       }
     }
@@ -477,15 +559,29 @@ const start = async () => {
 
     let nonceStart = 0;
     let startTime = Date.now();
-    const maxNonce = 0xffffffff - numInvocations;
+    const maxNonce = NONCE_SPACE_SIZE - numInvocations;
 
     device.queue.writeBuffer(midstateBuffer, 0, midstate.hash);
 
     while (miningStatus.value === "mining" || miningStatus.value === "change") {
       if (nonceStart > maxNonce) {
-        hashrate.value = (nonceStart / (Date.now() - startTime)) * 1000;
-        nonceStart = 0;
-        startTime = Date.now();
+        const elapsedMs = Date.now() - startTime;
+        if (elapsedMs > 0 && nonceStart > 0) {
+          hashrate.value = (nonceStart / elapsedMs) * 1000;
+        }
+
+        const reseededWork = tryAutoReseedWork(algorithm);
+        if (reseededWork) {
+          currentWork = reseededWork;
+          midstate = powMidstate(currentWork);
+          device.queue.writeBuffer(midstateBuffer, 0, midstate.hash);
+          nonceStart = 0;
+          startTime = Date.now();
+          continue;
+        }
+
+        stopAfterNonceSpaceExhausted(algorithm);
+        break;
       }
       device.queue.writeBuffer(
         nonceBuffer, 0, new Uint32Array([0, nonceStart])
@@ -505,7 +601,7 @@ const start = async () => {
       const result = bytesToHex(range.slice(0, 4));
       if (result !== "00000000") {
         const nonceHex = swapEndianness(result);
-        if (verify(work.target, midstate.preimage, nonceHex)) {
+        if (verify(currentWork.target, midstate.preimage, nonceHex)) {
           console.log("Verified", nonceHex);
           foundNonce(nonceHex);
           addMessage({ type: "found", nonce: nonceHex });
@@ -522,7 +618,9 @@ const start = async () => {
         updateWork();
         console.debug("Changing work");
         if (!workSignal.value) { console.debug("Invalid work"); break; }
-        midstate = powMidstate(workSignal.value);
+        currentWork = workSignal.value;
+        reseedRound = 0;
+        midstate = powMidstate(currentWork);
         device.queue.writeBuffer(midstateBuffer, 0, midstate.hash);
         miningStatus.value = "mining";
       }

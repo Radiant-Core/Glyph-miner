@@ -197,23 +197,23 @@ describe('Verification Logic', () => {
 
 // Test nonce padding
 describe('Nonce Padding', () => {
-  it('should pad nonces to 16 hex chars (8 bytes)', () => {
+  it('should pad nonces to 8 hex chars (4 bytes)', () => {
     const testCases = [
-      { nonce: 0, expected: '0000000000000000' },
-      { nonce: 1, expected: '0000000000000001' },
-      { nonce: 255, expected: '00000000000000ff' },
-      { nonce: 0xffffffff, expected: '00000000ffffffff' },
-      { nonce: 0x12345678, expected: '0000000012345678' },
+      { nonce: 0, expected: '00000000' },
+      { nonce: 1, expected: '00000001' },
+      { nonce: 255, expected: '000000ff' },
+      { nonce: 0xffffffff, expected: 'ffffffff' },
+      { nonce: 0x12345678, expected: '12345678' },
     ];
 
     testCases.forEach(({ nonce, expected }) => {
-      const padded = nonce.toString(16).padStart(16, '0');
+      const padded = nonce.toString(16).padStart(8, '0');
       expect(padded).toBe(expected);
-      expect(padded.length).toBe(16);
+      expect(padded.length).toBe(8);
       
-      // Verify hexToBytes produces 8 bytes
+      // Verify hexToBytes produces 4 bytes
       const bytes = hexToBytes(padded);
-      expect(bytes.length).toBe(8);
+      expect(bytes.length).toBe(4);
     });
   });
 });

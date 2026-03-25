@@ -3,7 +3,8 @@ import localforage from "localforage";
 import { fetchToken } from "./glyph";
 import { contractsUrl, useIndexerApi } from "./signals";
 import { ContractGroup, Token } from "./types";
-import { arrayChunks } from "./utils";
+import { arrayChunks, deriveSubContractRef } from "./utils";
+import { fetchRef } from "./client";
 import { 
   fetchContractsSimple, 
   fetchContractsExtended, 
@@ -19,6 +20,7 @@ export interface ContractSummaryItem {
   ticker: string;
   name: string;
   outputs: number;
+  contractCount?: number;
   algorithm: number;
   difficulty: number;
   reward: number;
@@ -31,6 +33,16 @@ export interface ContractSummaryItem {
   iconData?: string;
   iconUrl?: string;
 }
+
+type ContractCountCacheEntry = {
+  count: number;
+  verified: true;
+};
+
+const LIVE_COUNT_CACHE_PREFIX = "verified-contract-count:";
+const LIVE_COUNT_MAX_INDEX = 4096;
+const LIVE_COUNT_GAP_CONFIRMATION = 4;
+const LIVE_COUNT_CONCURRENCY = 4;
 
 // Cache for API availability check
 let apiAvailable: boolean | null = null;
@@ -286,33 +298,148 @@ export async function getCachedTokenContracts(firstRef: string) {
 const EXTENDED_CONTRACTS_URL = "https://glyph-miner.com/contracts-extended.json";
 
 export async function fetchContractSummaries(): Promise<ContractSummaryItem[]> {
-  // Try HTTPS extended endpoint first (fastest — single HTTP call)
-  try {
-    const response = await fetch(EXTENDED_CONTRACTS_URL, { signal: AbortSignal.timeout(8000) });
-    if (response.ok) {
-      const data = await response.json() as ExtendedContractsResponse;
-      if (data?.contracts?.length > 0) {
-        console.log(`Fast-loaded ${data.contracts.length} contracts from extended endpoint`);
-        return data.contracts.map(mapExtendedToSummary);
-      }
-    }
-  } catch (e) {
-    console.debug("Extended endpoint not available, trying API:", e);
-  }
-
-  // Try Electrum RPC extended format
+  // Prefer Electrum RPC/API when enabled so icon metadata stays in sync.
   if (useIndexerApi.value) {
     const isAvailable = await checkApiAvailable();
     if (isAvailable) {
       const response = await fetchContractsExtended();
       if (response?.contracts?.length) {
-        console.log(`Loaded ${response.contracts.length} contracts from Electrum API`);
-        return response.contracts.map(mapExtendedToSummary);
+        const mineableContracts = response.contracts.filter(isContractMineable);
+        console.log(`Loaded ${mineableContracts.length} mineable contracts from Electrum API`);
+        return mineableContracts.map(mapExtendedToSummary);
       }
     }
   }
 
+  // Fallback: HTTPS extended endpoint (single HTTP call)
+  try {
+    const response = await fetch(EXTENDED_CONTRACTS_URL, { signal: AbortSignal.timeout(8000) });
+    if (response.ok) {
+      const data = await response.json() as ExtendedContractsResponse;
+      if (data?.contracts?.length > 0) {
+        const mineableContracts = data.contracts.filter(isContractMineable);
+        console.log(`Fast-loaded ${mineableContracts.length} mineable contracts from extended endpoint`);
+        return mineableContracts.map(mapExtendedToSummary);
+      }
+    }
+  } catch (e) {
+    console.debug("Extended endpoint not available:", e);
+  }
+
   return [];
+}
+
+async function probeSubContractExists(
+  tokenRef: string,
+  index: number,
+  seen: Map<number, boolean | null>
+): Promise<boolean | null> {
+  const cached = seen.get(index);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  try {
+    const ref = deriveSubContractRef(tokenRef, index);
+    const history = await fetchRef(ref);
+    const exists = history.length > 0;
+    seen.set(index, exists);
+    return exists;
+  } catch (e) {
+    console.debug(`Contract count probe failed for ${tokenRef} @${index}:`, e);
+    seen.set(index, null);
+    return null;
+  }
+}
+
+async function deriveVerifiedContractCount(tokenRef: string): Promise<number | null> {
+  const normalizedRef = tokenRef.toLowerCase();
+  const cacheKey = `${LIVE_COUNT_CACHE_PREFIX}${normalizedRef}`;
+  const cached = await localforage.getItem<ContractCountCacheEntry>(cacheKey);
+  if (cached?.verified && Number.isFinite(cached.count) && cached.count >= 0) {
+    return cached.count;
+  }
+
+  const seen = new Map<number, boolean | null>();
+
+  const firstExists = await probeSubContractExists(normalizedRef, 0, seen);
+  if (firstExists === null) return null;
+  if (!firstExists) {
+    await localforage.setItem(cacheKey, { count: 0, verified: true });
+    return 0;
+  }
+
+  let low = 0;
+  let high = 1;
+  while (high <= LIVE_COUNT_MAX_INDEX) {
+    const exists = await probeSubContractExists(normalizedRef, high, seen);
+    if (exists === null) return null;
+    if (!exists) break;
+    low = high;
+    high *= 2;
+  }
+
+  if (high > LIVE_COUNT_MAX_INDEX) {
+    return null;
+  }
+
+  let left = low + 1;
+  let right = high;
+  while (left < right) {
+    const mid = Math.floor((left + right) / 2);
+    const exists = await probeSubContractExists(normalizedRef, mid, seen);
+    if (exists === null) return null;
+    if (exists) {
+      left = mid + 1;
+    } else {
+      right = mid;
+    }
+  }
+
+  const firstMissing = left;
+  for (let i = 0; i < LIVE_COUNT_GAP_CONFIRMATION; i++) {
+    const exists = await probeSubContractExists(normalizedRef, firstMissing + i, seen);
+    if (exists === null) return null;
+    if (exists) {
+      return null;
+    }
+  }
+
+  await localforage.setItem(cacheKey, { count: firstMissing, verified: true });
+  return firstMissing;
+}
+
+export async function enrichContractSummariesWithVerifiedCounts(
+  items: ContractSummaryItem[]
+): Promise<ContractSummaryItem[]> {
+  if (!items.length) return items;
+
+  const enriched = [...items];
+  let cursor = 0;
+  const workerCount = Math.min(LIVE_COUNT_CONCURRENCY, items.length);
+
+  const workers = new Array(workerCount).fill(undefined).map(async () => {
+    while (cursor < items.length) {
+      const idx = cursor;
+      cursor += 1;
+
+      const item = items[idx];
+      const count = await deriveVerifiedContractCount(item.ref);
+      if (count !== null) {
+        enriched[idx] = {
+          ...item,
+          contractCount: count,
+        };
+      }
+    }
+  });
+
+  await Promise.all(workers);
+  return enriched;
+}
+
+function isContractMineable(c: ExtendedContract): boolean {
+  return c.active && c.outputs > 0 && c.percent_mined < 100;
 }
 
 function mapExtendedToSummary(c: ExtendedContract): ContractSummaryItem {
