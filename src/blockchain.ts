@@ -26,12 +26,12 @@ import {
   scriptHash,
   deriveSubContractRef,
   push4bytes,
-  pushMinimal,
 } from "./utils";
 import { broadcast, client, fetchRef, fetchTx } from "./client";
 import { Contract, Work, Utxo, AlgorithmId } from "./types";
 import { FEE_PER_KB } from "./constants";
 import { fetchContract as fetchContractFromApi } from "./dmint-api";
+import { normalizeNonceHexForScriptSig } from "./nonce";
 
 // Map API algorithm ID to AlgorithmId string (0/1/2 only for now)
 function mapAlgorithmId(apiAlgo: number): AlgorithmId {
@@ -94,16 +94,12 @@ function mapHashOpToAlgorithm(hashOp?: "aa" | "ee" | "ef"): AlgorithmId | undefi
   }
 }
 
-const NONCE_BYTES: 4 = 4;
+function nonceBytesForAlgorithm(algorithm?: AlgorithmId): 4 | 8 {
+  return algorithm === "blake3" || algorithm === "k12" ? 8 : 4;
+}
 
-function normalizeNonceHex(nonceHex: string, nonceBytes: 4): string {
-  const normalized = nonceHex.trim().toLowerCase();
-  const requiredHexLength = nonceBytes * 2;
-  if (normalized.length === requiredHexLength) return normalized;
-  if (normalized.length > requiredHexLength) {
-    return normalized.substring(0, requiredHexLength);
-  }
-  return normalized.padStart(requiredHexLength, "0");
+function normalizeNonceHex(nonceHex: string, nonceBytes: 4 | 8): string {
+  return normalizeNonceHexForScriptSig(nonceHex, nonceBytes);
 }
 
 function findNonMinimalDataPush(scriptHex: string): string | undefined {
@@ -128,70 +124,10 @@ type NextContractState = {
   lastTime?: bigint;
 };
 
-function computeAsertShiftTarget(
-  currentTarget: bigint,
-  lastTime: bigint,
-  targetTime: bigint,
-  nextTime: bigint
-): bigint {
-  if (targetTime <= 0n) {
-    return currentTarget;
-  }
-
-  const timeDelta = nextTime - lastTime;
-  const shiftAmount = (timeDelta - targetTime) / targetTime;
-  const clampedShift =
-    shiftAmount > 4n ? 4n : shiftAmount < -4n ? -4n : shiftAmount;
-
-  if (clampedShift > 0n) {
-    return currentTarget << clampedShift;
-  }
-  if (clampedShift < 0n) {
-    return currentTarget >> -clampedShift;
-  }
-  return currentTarget;
-}
-
 function buildNextContractState(
   contract: Contract,
   newHeight: bigint
 ): NextContractState {
-  const hasTimedDaaState =
-    typeof contract.lastTime === "bigint" &&
-    typeof contract.targetTime === "bigint";
-
-  if (hasTimedDaaState) {
-    const nextTime = BigInt(Math.floor(Date.now() / 1000));
-    const nextTarget = computeAsertShiftTarget(
-      contract.target,
-      contract.lastTime as bigint,
-      contract.targetTime as bigint,
-      nextTime
-    );
-
-    let nextStateScript =
-      `${push4bytes(Number(newHeight))}d8${contract.contractRef}d0${contract.tokenRef}` +
-      `${pushMinimal(contract.maxHeight)}${pushMinimal(contract.reward)}${pushMinimal(
-        nextTarget
-      )}`;
-
-    if (typeof contract.algoId === "bigint") {
-      nextStateScript += pushMinimal(contract.algoId);
-    }
-
-    nextStateScript += `${push4bytes(Number(nextTime))}${pushMinimal(
-      contract.targetTime as bigint
-    )}`;
-
-    return {
-      script: contract.codeScript
-        ? `${nextStateScript}bd${contract.codeScript}`
-        : nextStateScript,
-      target: nextTarget,
-      lastTime: nextTime,
-    };
-  }
-
   // contract.script stores the mutable state section. Replace only the first
   // 4-byte height push and preserve the rest exactly as-is.
   const nextStateScript = `${push4bytes(Number(newHeight))}${contract.script.substring(10)}`;
@@ -199,7 +135,11 @@ function buildNextContractState(
   // If codeScript was parsed from chain, preserve it exactly so algorithm/DAA
   // specific bytecode remains unchanged.
   if (contract.codeScript) {
-    return { script: `${nextStateScript}bd${contract.codeScript}`, target: contract.target };
+    return {
+      script: `${nextStateScript}bd${contract.codeScript}`,
+      target: contract.target,
+      lastTime: contract.lastTime,
+    };
   }
 
   // Legacy fallback for older parsed contracts without codeScript.
@@ -209,6 +149,7 @@ function buildNextContractState(
       height: newHeight,
     }),
     target: contract.target,
+    lastTime: contract.lastTime,
   };
 }
 
@@ -227,13 +168,15 @@ async function claimTokens(
 
   const newHeight = contract.height + 1n;
   const lastMint = newHeight === contract.maxHeight;
-  const nonceBytes = NONCE_BYTES;
+  const codeScriptHashOp = extractCodeScriptHashOp(contract.codeScript);
+  const codeScriptAlgo = mapHashOpToAlgorithm(codeScriptHashOp);
+  const resolvedAlgorithm = work.algorithm || contract.algorithm || codeScriptAlgo;
+  const nonceBytes = nonceBytesForAlgorithm(resolvedAlgorithm);
   const nonceForScriptSig = normalizeNonceHex(nonce, nonceBytes);
   const inputScriptHash = bytesToHex(sha256(sha256(work.inputScript)));
   const outputScriptHash = bytesToHex(sha256(sha256(work.outputScript)));
   const fundingInputCount = utxos.value.length;
   const fundingInputsMatchInputHash = fundingInputCount > 0;
-  const codeScriptHashOp = extractCodeScriptHashOp(contract.codeScript);
   const fullContractScript = contract.codeScript
     ? `${contract.script}bd${contract.codeScript}`
     : contract.script;
@@ -265,7 +208,8 @@ async function claimTokens(
     return { success: false, error: ClaimError.MISSING_INPUTS };
   }
 
-  const scriptSigHex = `04${nonceForScriptSig}20${inputScriptHash}20${outputScriptHash}00`;
+  const noncePushOp = nonceBytes.toString(16).padStart(2, "0");
+  const scriptSigHex = `${noncePushOp}${nonceForScriptSig}20${inputScriptHash}20${outputScriptHash}00`;
   const scriptSig = Script.fromHex(scriptSigHex);
 
   const tx = new Transaction();
@@ -339,10 +283,6 @@ async function claimTokens(
     })
   );
 
-  if (typeof nextContractState?.lastTime === "bigint") {
-    tx.lockUntilDate(Number(nextContractState.lastTime));
-  }
-
   tx.change(wallet.value.address);
   tx.sign(privKey);
   tx.seal();
@@ -357,11 +297,9 @@ async function claimTokens(
       scriptHex,
     };
   });
-  const codeScriptAlgo = mapHashOpToAlgorithm(codeScriptHashOp);
-
   console.debug("Contract submit audit", {
     nonce: nonceForScriptSig,
-    algorithm: work.algorithm || contract.algorithm || codeScriptAlgo,
+    algorithm: resolvedAlgorithm,
     codeScriptHashOp,
     target: contract.target.toString(),
     nextTarget: nextContractState?.target?.toString(),
@@ -641,7 +579,10 @@ async function submit() {
   }
 
   const codeScriptHashOp = extractCodeScriptHashOp(contract.value.codeScript);
-  const nonceBytes = NONCE_BYTES;
+  const codeScriptAlgo = mapHashOpToAlgorithm(codeScriptHashOp);
+  const resolvedAlgorithm =
+    work.value.algorithm || contract.value.algorithm || codeScriptAlgo;
+  const nonceBytes = nonceBytesForAlgorithm(resolvedAlgorithm);
   console.debug("Submit context", {
     nonceHexLength: nonce.length,
     nonceByteLength: nonce.length / 2,

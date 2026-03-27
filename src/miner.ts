@@ -22,16 +22,50 @@ import { createWork, powPreimage } from "./pow";
 import { foundNonce } from "./blockchain";
 import { isAlgorithmSupported } from "./algorithms";
 import { ALGORITHMS, calcTimeToMine } from "./algorithms/types";
+import {
+  NONCE_BYTES_V1,
+  NONCE_BYTES_V2,
+  nonceBytesForContracts,
+  nonceHexForContracts,
+  normalizeNonceHexForScriptSig,
+} from "./nonce";
 
 // Import shaders as raw text
 import sha256dShaderText from "./shaders/sha256d.wgsl?raw";
 import blake3ShaderText from "./shaders/blake3.wgsl?raw";
 import k12ShaderText from "./shaders/k12.wgsl?raw";
 
-const NONCE_BYTES = 4;
 const NONCE_SPACE_SIZE = 0x1_0000_0000;
 const MAX_MINT_MESSAGE_LENGTH = 80;
+const GPU_VERIFY_FAILURE_THRESHOLD = 5;
+const DEBUG_PARITY_NONCES = [0x00000001, 0x12345678];
 let reseedRound = 0;
+
+type ParityHarnessResult = {
+  nonce: number;
+  cpuHex: string;
+  gpuHex: string;
+  match: boolean;
+};
+
+type GlyphDebugApi = {
+  testGpuParityBlake3: () => Promise<{
+    algorithm: "blake3";
+    allMatch: boolean;
+    results: ParityHarnessResult[];
+  }>;
+  testGpuParityK12: () => Promise<{
+    algorithm: "k12";
+    allMatch: boolean;
+    results: ParityHarnessResult[];
+  }>;
+};
+
+declare global {
+  interface Window {
+    glyphDebug?: GlyphDebugApi;
+  }
+}
 
 function buildEntropyMessage(baseMessage: string, round: number) {
   if (round <= 0) {
@@ -57,7 +91,7 @@ function stopAfterNonceSpaceExhausted(algorithm: AlgorithmId) {
   miningStatus.value = "stop";
 }
 
-function tryAutoReseedWork(algorithm: AlgorithmId) {
+function tryAutoReseedWork() {
   if (!autoReseed.value) {
     return;
   }
@@ -68,11 +102,6 @@ function tryAutoReseedWork(algorithm: AlgorithmId) {
   if (!nextWork) {
     return;
   }
-
-  addMessage({
-    type: "general",
-    msg: `Nonce space exhausted for ${algorithm}. Auto-reseeded work entropy (round ${reseedRound}).`,
-  });
   return nextWork;
 }
 
@@ -84,13 +113,17 @@ function signedToHex(number: number) {
   return value.toString(16).padStart(8, "0");
 }
 
-// Map algorithm ID number to AlgorithmId string (0/1/2 only for now)
-function mapAlgorithmId(algoId: number): AlgorithmId {
+// Map algorithm ID number to AlgorithmId string (only consensus-supported GPU algos)
+export function mapAlgorithmId(algoId: number): AlgorithmId | undefined {
   switch (algoId) {
-    case 0x00: return 'sha256d';
-    case 0x01: return 'blake3';
-    case 0x02: return 'k12';
-    default: return 'sha256d';
+    case 0x00:
+      return "sha256d";
+    case 0x01:
+      return "blake3";
+    case 0x02:
+      return "k12";
+    default:
+      return;
   }
 }
 
@@ -112,7 +145,7 @@ export function mapHashOpToAlgorithm(hashOp?: "aa" | "ee" | "ef"): AlgorithmId |
 }
 
 // Get algorithm - checks v2 glyph payload first, then falls back to contract (from API)
-function getAlgorithm(): AlgorithmId {
+function getAlgorithm(): AlgorithmId | undefined {
   const payload = glyph.value?.payload;
   const payloadAlgoId = (payload?.dmint as { algo?: number } | undefined)?.algo;
   const payloadAlgo =
@@ -150,26 +183,18 @@ function getAlgorithm(): AlgorithmId {
     return contractAlgo;
   }
 
-  // First check v2 glyph payload for dmint.algo
-  if (payload) {
-    // Check for v2 version field
-    const isV2 = payload.v === 2;
-    
-    // Check for dmint field with algorithm
-    const dmint = payload.dmint as { algo?: number } | undefined;
-    if (dmint && typeof dmint.algo === 'number') {
-      const algo = mapAlgorithmId(dmint.algo);
-      console.log(`Using algorithm from v2 glyph payload: ${dmint.algo} -> ${algo}`);
-      return algo;
+  // Check v2 glyph payload for explicit dmint.algo
+  if (typeof payloadAlgoId === "number") {
+    if (!payloadAlgo) {
+      console.warn(`Unsupported dmint algo id in payload: ${payloadAlgoId}`);
+      return;
     }
-    
-    if (isV2) {
-      console.log("v2 glyph without dmint.algo, checking contract");
-    }
+    console.log(`Using algorithm from v2 glyph payload: ${payloadAlgoId} -> ${payloadAlgo}`);
+    return payloadAlgo;
   }
-  
-  console.log("No algorithm found, defaulting to sha256d");
-  return 'sha256d';
+
+  // Legacy contracts without explicit metadata are assumed SHA256d.
+  return "sha256d";
 }
 
 // Get shader code for algorithm
@@ -197,11 +222,15 @@ export function updateWork(options?: { notify?: boolean }) {
   
   // Get algorithm from v2 glyph payload or contract/API
   const algorithm = getAlgorithm();
-  
+
   // Check if algorithm is supported
-  if (!isAlgorithmSupported(algorithm)) {
+  if (!algorithm || !isAlgorithmSupported(algorithm)) {
+    workSignal.value = undefined;
     if (notify) {
-      addMessage({ type: "general", msg: `Unsupported algorithm: ${algorithm}` });
+      addMessage({
+        type: "general",
+        msg: `Unsupported algorithm${algorithm ? `: ${algorithm}` : ""}`,
+      });
     }
     miningStatus.value = "stop";
     return;
@@ -267,56 +296,214 @@ function partialHash(data: Uint8Array) {
   );
 }
 
-function verify(target: bigint, partialPreimage: Uint8Array, nonce: string) {
-  const preimage = new Uint8Array(partialPreimage.byteLength + NONCE_BYTES);
+function nonceHexForBytes(nonceHex: string, nonceBytes: 4 | 8): string {
+  return normalizeNonceHexForScriptSig(nonceHex, nonceBytes);
+}
+
+export function nonceBytesFromU32(n: number): Uint8Array {
+  return nonceBytesForContracts(n);
+}
+
+function buildV2Preimage(partialPreimage: Uint8Array, nonceU32: number): Uint8Array {
+  const preimage = new Uint8Array(partialPreimage.byteLength + NONCE_BYTES_V2);
   preimage.set(partialPreimage);
-  preimage.set(hexToBytes(nonce), 64);
+  preimage.set(nonceBytesForContracts(nonceU32), partialPreimage.byteLength);
+  return preimage;
+}
+
+export function canonicalV2Hash(
+  algorithm: Extract<AlgorithmId, "blake3" | "k12">,
+  partialPreimage: Uint8Array,
+  nonceU32: number,
+): Uint8Array {
+  const preimage = buildV2Preimage(partialPreimage, nonceU32);
+  if (algorithm === "blake3") {
+    return blake3(preimage);
+  }
+  return k12(preimage, { dkLen: 32 });
+}
+
+function u32WordsToBytesLE(words: Uint32Array): Uint8Array {
+  const out = new Uint8Array(words.length * 4);
+  const view = new DataView(out.buffer);
+  for (let i = 0; i < words.length; i++) {
+    view.setUint32(i * 4, words[i], true);
+  }
+  return out;
+}
+
+export async function readGpuHashDebug(
+  algorithm: Extract<AlgorithmId, "blake3" | "k12">,
+  partialPreimage: Uint8Array,
+  nonceU32: number,
+): Promise<Uint8Array> {
+  if (partialPreimage.byteLength < 64) {
+    throw new Error("partialPreimage must be at least 64 bytes");
+  }
+
+  const adapter = await (navigator as any).gpu?.requestAdapter({
+    powerPreference: "high-performance",
+  });
+  const device = await adapter?.requestDevice();
+  if (!device) {
+    throw new Error("No GPU device found.");
+  }
+
+  const module = device.createShaderModule({
+    label: `${algorithm} debug module`,
+    code: getShaderCode(algorithm),
+  });
+  const pipeline = device.createComputePipeline({
+    label: `${algorithm} debug pipeline`,
+    layout: "auto",
+    compute: {
+      module,
+      entryPoint: "main",
+    },
+  });
+
+  const midstateBuffer = device.createBuffer({
+    size: 64,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  const targetBuffer = device.createBuffer({
+    size: 12,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  const resultsBuffer = device.createBuffer({
+    size: 256 * 16,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+  });
+  const nonceOffsetBuffer = device.createBuffer({
+    size: 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+
+  const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: midstateBuffer } },
+      { binding: 1, resource: { buffer: targetBuffer } },
+      { binding: 2, resource: { buffer: resultsBuffer } },
+      { binding: 3, resource: { buffer: nonceOffsetBuffer } },
+    ],
+  });
+
+  const gpuReadBuffer = device.createBuffer({
+    size: 13 * 4,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+
+  device.queue.writeBuffer(midstateBuffer, 0, partialPreimage.slice(0, 64));
+  device.queue.writeBuffer(targetBuffer, 0, new Uint32Array([1, 0, 0]));
+  device.queue.writeBuffer(resultsBuffer, 0, new Uint32Array(13));
+  device.queue.writeBuffer(nonceOffsetBuffer, 0, new Uint32Array([nonceU32 >>> 0]));
+
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroup);
+  pass.dispatchWorkgroups(1);
+  pass.end();
+  encoder.copyBufferToBuffer(resultsBuffer, 0, gpuReadBuffer, 0, 13 * 4);
+  device.queue.submit([encoder.finish()]);
+
+  await gpuReadBuffer.mapAsync(GPUMapMode.READ);
+  const range = new Uint32Array(gpuReadBuffer.getMappedRange());
+  const resultCount = range[0];
+  if (resultCount === 0) {
+    gpuReadBuffer.unmap();
+    throw new Error(`${algorithm} debug shader did not return a hash`);
+  }
+  const hashWords = new Uint32Array(8);
+  hashWords.set(range.slice(5, 13));
+  gpuReadBuffer.unmap();
+
+  return u32WordsToBytesLE(hashWords);
+}
+
+export async function runV2GpuCpuParityHarness(
+  algorithm: Extract<AlgorithmId, "blake3" | "k12">,
+  partialPreimage: Uint8Array,
+  nonces: number[],
+): Promise<{ nonce: number; cpuHex: string; gpuHex: string; match: boolean }[]> {
+  const results: { nonce: number; cpuHex: string; gpuHex: string; match: boolean }[] = [];
+  for (const nonce of nonces) {
+    const nonceU32 = nonce >>> 0;
+    const cpu = canonicalV2Hash(algorithm, partialPreimage, nonceU32);
+    const gpu = await readGpuHashDebug(algorithm, partialPreimage, nonceU32);
+    const cpuHex = bytesToHex(cpu);
+    const gpuHex = bytesToHex(gpu);
+    results.push({ nonce: nonceU32, cpuHex, gpuHex, match: cpuHex === gpuHex });
+  }
+  return results;
+}
+
+function debugParityPrefix64(): Uint8Array {
+  const prefix = new Uint8Array(64);
+  for (let i = 0; i < 64; i++) {
+    prefix[i] = i;
+  }
+  return prefix;
+}
+
+function registerGlyphDebugTools() {
+  if (!import.meta.env.DEV || typeof window === "undefined") {
+    return;
+  }
+
+  const runParity = async <T extends "blake3" | "k12">(algorithm: T): Promise<{
+    algorithm: T;
+    allMatch: boolean;
+    results: ParityHarnessResult[];
+  }> => {
+    const partialPreimage = debugParityPrefix64();
+    const results = await runV2GpuCpuParityHarness(
+      algorithm,
+      partialPreimage,
+      DEBUG_PARITY_NONCES,
+    );
+    const allMatch = results.every((r) => r.match);
+    console.table(results);
+    console.log(`[glyphDebug] ${algorithm} parity ${allMatch ? "PASS" : "FAIL"}`);
+    return { algorithm, allMatch, results };
+  };
+
+  window.glyphDebug = {
+    testGpuParityBlake3: () => runParity("blake3"),
+    testGpuParityK12: () => runParity("k12"),
+  };
+}
+
+registerGlyphDebugTools();
+
+function hashMeetsTarget(hash: Uint8Array, target: bigint): boolean {
+  if (hash[0] !== 0 || hash[1] !== 0 || hash[2] !== 0 || hash[3] !== 0) {
+    return false;
+  }
+  const view = new DataView(hash.slice(4, 12).buffer, 0);
+  return view.getBigUint64(0, false) < target;
+}
+
+function verify(target: bigint, partialPreimage: Uint8Array, nonce: string) {
+  const preimage = new Uint8Array(partialPreimage.byteLength + NONCE_BYTES_V1);
+  preimage.set(partialPreimage);
+  preimage.set(hexToBytes(nonceHexForBytes(nonce, 4)), 64);
 
   const hash = sha256(sha256(preimage));
-
-  // First four bytes must always be zero
-  if (hash[0] !== 0 || hash[1] !== 0 || hash[2] !== 0 || hash[3] !== 0) {
-    return false;
-  }
-
-  // Check next 8 bytes against target
-  const view = new DataView(hash.slice(4, 12).buffer, 0);
-  const num = view.getBigUint64(0, false);
-  return num < target;
+  return hashMeetsTarget(hash, target);
 }
 
-function verifyK12(target: bigint, partialPreimage: Uint8Array, nonce: string) {
-  const preimage = new Uint8Array(partialPreimage.byteLength + NONCE_BYTES);
-  preimage.set(partialPreimage);
-  preimage.set(hexToBytes(nonce), 64);
-
+function verifyK12(target: bigint, partialPreimage: Uint8Array, nonceU32: number) {
+  const preimage = buildV2Preimage(partialPreimage, nonceU32);
   const hash = k12(preimage, { dkLen: 32 });
-
-  if (hash[0] !== 0 || hash[1] !== 0 || hash[2] !== 0 || hash[3] !== 0) {
-    return false;
-  }
-
-  const view = new DataView(hash.slice(4, 12).buffer, 0);
-  const num = view.getBigUint64(0, false);
-  return num < target;
+  return hashMeetsTarget(hash, target);
 }
 
-function verifyBlake3(target: bigint, partialPreimage: Uint8Array, nonce: string) {
-  const preimage = new Uint8Array(partialPreimage.byteLength + NONCE_BYTES);
-  preimage.set(partialPreimage);
-  preimage.set(hexToBytes(nonce), 64);
-
+function verifyBlake3(target: bigint, partialPreimage: Uint8Array, nonceU32: number) {
+  const preimage = buildV2Preimage(partialPreimage, nonceU32);
   const hash = blake3(preimage);
-
-  // First four bytes must always be zero
-  if (hash[0] !== 0 || hash[1] !== 0 || hash[2] !== 0 || hash[3] !== 0) {
-    return false;
-  }
-
-  // Check next 8 bytes against target
-  const view = new DataView(hash.slice(4, 12).buffer, 0);
-  const num = view.getBigUint64(0, false);
-  return num < target;
+  return hashMeetsTarget(hash, target);
 }
 
 async function stop() {
@@ -447,15 +634,16 @@ const start = async () => {
     let nonceStart = 0;
     let startTime = Date.now();
     const maxNonce = NONCE_SPACE_SIZE - numInvocations;
+    let consecutiveGpuVerifyFailures = 0;
 
-    while (miningStatus.value === "mining" || miningStatus.value === "change") {
+    while (["mining", "change"].includes(miningStatus.value as string)) {
       if (nonceStart > maxNonce) {
         const elapsedMs = Date.now() - startTime;
         if (elapsedMs > 0 && nonceStart > 0) {
           hashrate.value = (nonceStart / elapsedMs) * 1000;
         }
 
-        const reseededWork = tryAutoReseedWork(algorithm);
+        const reseededWork = tryAutoReseedWork();
         if (reseededWork) {
           currentWork = reseededWork;
           midstate = powMidstate(currentWork);
@@ -489,27 +677,54 @@ const start = async () => {
       await gpuReadBuffer.mapAsync(GPUMapMode.READ);
       const range = new Uint32Array(gpuReadBuffer.getMappedRange());
       const resultCount = range[0];
+      let shouldStopForGpuMismatch = false;
+      if (resultCount > 255) {
+        console.warn(`${algorithm} shader reported ${resultCount} results; truncating to first 255.`);
+      }
       if (resultCount > 0) {
         // First result at flat offset 4: [nonce, hash0, hash1, flag]
-        const foundNonceVal = range[4];
-        const nonceHex = swapEndianness(foundNonceVal.toString(16).padStart(8, "0"));
+        const foundNonceVal = range[4] >>> 0;
+        const nonceHex = useV2Layout
+          ? nonceHexForContracts(foundNonceVal)
+          : swapEndianness(foundNonceVal.toString(16).padStart(8, "0"));
         // CPU-side verification before submitting
-        const verifyFn =
-          algorithm === 'blake3'
-            ? verifyBlake3
-            : algorithm === 'k12'
-              ? verifyK12
-              : verify;
-        if (verifyFn(currentWork.target, midstate.preimage, nonceHex)) {
+        const verified =
+          algorithm === "sha256d"
+            ? verify(currentWork.target, midstate.preimage, nonceHex)
+            : algorithm === "blake3"
+              ? verifyBlake3(currentWork.target, midstate.preimage, foundNonceVal)
+              : verifyK12(currentWork.target, midstate.preimage, foundNonceVal);
+        if (verified) {
+          consecutiveGpuVerifyFailures = 0;
           console.log(`${algorithm} solution verified, nonce: ${nonceHex}`);
           foundNonce(nonceHex);
           addMessage({ type: "found", nonce: nonceHex });
           found.value++;
         } else {
+          consecutiveGpuVerifyFailures++;
           console.warn(`${algorithm} GPU found nonce ${nonceHex} but CPU verification failed`);
+          if (consecutiveGpuVerifyFailures >= GPU_VERIFY_FAILURE_THRESHOLD) {
+            addMessage({
+              type: "general",
+              msg: `Disabling GPU mining for this session after ${consecutiveGpuVerifyFailures} consecutive CPU verification mismatches.`,
+            });
+            if (import.meta.env.DEV) {
+              addMessage({
+                type: "general",
+                msg: "Debug tip: run window.glyphDebug.testGpuParityBlake3() or window.glyphDebug.testGpuParityK12()",
+              });
+            }
+            miningEnabled.value = false;
+            addMessage({ type: "stop" });
+            miningStatus.value = "stop";
+            shouldStopForGpuMismatch = true;
+          }
         }
       }
       gpuReadBuffer.unmap();
+      if (shouldStopForGpuMismatch) {
+        break;
+      }
       nonceStart += numInvocations;
 
       // @ts-expect-error doesn't matter
@@ -570,7 +785,7 @@ const start = async () => {
           hashrate.value = (nonceStart / elapsedMs) * 1000;
         }
 
-        const reseededWork = tryAutoReseedWork(algorithm);
+        const reseededWork = tryAutoReseedWork();
         if (reseededWork) {
           currentWork = reseededWork;
           midstate = powMidstate(currentWork);
@@ -609,7 +824,6 @@ const start = async () => {
         }
       }
       device.queue.writeBuffer(resultBuffer, 0, new Uint32Array([0]));
-      resultBuffer.unmap();
       gpuReadBuffer.unmap();
       nonceStart += numInvocations;
 

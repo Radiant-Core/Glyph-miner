@@ -1,6 +1,7 @@
 // KangarooTwelve (K12) mining shader — correct 64-bit Keccak-p[1600,12]
 // State: 25 lanes x 64 bits = 50 u32s. Lane i = (state[2i], state[2i+1]) = (lo, hi)
-// Mining: K12(preimage(64B) || nonce(4B)) with length_encode(0)={0x00} framing
+// Mining canonical preimage: K12(prefix64 || nonce64), where nonce64 is
+// nonce LE u32 in low word and zero high word.
 
 @group(0) @binding(0) var<storage, read> midstate: array<u32>;
 @group(0) @binding(1) var<storage, read> mining_target: array<u32>;
@@ -131,15 +132,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Absorb preimage (64 bytes = lanes 0-7, state[0..15])
     for (var i = 0u; i < 16u; i = i + 1u) { state[i] = midstate[i]; }
 
-    // Absorb nonce (bytes 64-67 = lane 8 lo word)
+    // Absorb nonce64 (bytes 64-71)
+    // bytes 64-67: nonce LE u32
     state[16u] = nonce;
+    // bytes 68-71: zero high u32
     state[17u] = 0u;
 
     // K12 framing: length_encode(0) = {0x00} (1 byte, NOT {0x00,0x01})
     // K12 spec: K12(M,"") = TurboSHAKE128(M || 0x00 || 0x07, 0x07)
-    // byte68=0x00 (length_encode(0)), byte69=0x07 (K12 domain separator)
-    // Combined into lane 8 hi word (little-endian): 0x00000700u
-    state[17u] = 0x00000700u;
+    // Message is now 72 bytes, so framing starts at byte72 (lane 9 low word)
+    // byte72=0x00 (length_encode(0)), byte73=0x07 (K12 domain separator)
+    state[18u] = 0x00000700u;
 
     // Final padding bit: 0x80 at byte 167 (last byte of rate=168)
     // byte 167 = lane 20 hi word, bits 24-31
@@ -150,6 +153,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Extract 32-byte hash (first 4 lanes)
     var hash: array<u32, 8>;
     for (var i = 0u; i < 8u; i = i + 1u) { hash[i] = state[i]; }
+
+    // Debug mode for CPU/GPU parity checks.
+    // Host sets mining_target[0] = 1 to request raw hash output from invocation 0.
+    if (mining_target[0u] == 1u) {
+        if (global_id.x == 0u) {
+            atomicStore(&results[0], 1u);
+            atomicStore(&results[4u], nonce);
+            for (var i = 0u; i < 8u; i = i + 1u) {
+                atomicStore(&results[5u + i], hash[i]);
+            }
+        }
+        return;
+    }
 
     if (check_mining_target(hash)) {
         let idx = atomicAdd(&results[0], 1u);
