@@ -1,1 +1,1 @@
-export const FEE_PER_KB = 2000000;
+export const FEE_PER_KB = 10000000;
