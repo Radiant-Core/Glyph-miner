@@ -73,6 +73,122 @@ enum ClaimError {
   NON_MINIMAL_PUSH,
 }
 
+type DmintPreimageStackCheck = {
+  usesIndexedLegacyPreimage: boolean;
+  stateItemCount: number;
+  pick5: string;
+  pick9a: string;
+  pick9b: string;
+  roll10: string;
+  matchesExpectedLayout: boolean;
+};
+
+function pickStackItem(stack: string[], n: number): string {
+  return stack[stack.length - 1 - n];
+}
+
+function stackPick(stack: string[], n: number) {
+  stack.push(pickStackItem(stack, n));
+}
+
+function stackCat(stack: string[]) {
+  const right = stack.pop();
+  const left = stack.pop();
+  stack.push(`cat(${left},${right})`);
+}
+
+function stackSha256(stack: string[]) {
+  const value = stack.pop();
+  stack.push(`sha256(${value})`);
+}
+
+function stackRoll(stack: string[], n: number): string {
+  const index = stack.length - 1 - n;
+  const [value] = stack.splice(index, 1);
+  stack.push(value);
+  return value;
+}
+
+function getStateItemsFromScriptHex(stateScriptHex: string): string[] | undefined {
+  const asm = Script.fromHex(stateScriptHex).toASM();
+  const tokens = asm.split(" ").filter(Boolean);
+  const singletonIndex = tokens.indexOf("OP_PUSHINPUTREFSINGLETON");
+  const refIndex = tokens.indexOf("OP_PUSHINPUTREF", singletonIndex + 2);
+  if (singletonIndex < 0 || refIndex < 0) {
+    return;
+  }
+
+  const height = tokens[0];
+  const contractRef = tokens[singletonIndex + 1];
+  const tokenRef = tokens[refIndex + 1];
+  const tail = tokens.slice(refIndex + 2);
+  return [height, contractRef, tokenRef, ...tail];
+}
+
+function analyzeDmintPreimageStackLayout(
+  stateScriptHex: string,
+  codeScriptHex?: string,
+): DmintPreimageStackCheck | undefined {
+  if (!codeScriptHex) {
+    return;
+  }
+
+  const codeAsm = Script.fromHex(codeScriptHex).toASM();
+  const usesIndexedLegacyPreimage =
+    codeAsm.includes("OP_OUTPOINTTXHASH OP_5 OP_PICK") &&
+    codeAsm.includes("OP_9 OP_PICK OP_9 OP_PICK") &&
+    codeAsm.includes("OP_10 OP_ROLL");
+
+  if (!usesIndexedLegacyPreimage) {
+    return;
+  }
+
+  const stateItems = getStateItemsFromScriptHex(stateScriptHex);
+  if (!stateItems) {
+    return;
+  }
+
+  const stack = [
+    "nonce",
+    "inputHash",
+    "outputHash",
+    "outputIndex",
+    ...stateItems,
+    "outpointTxHash",
+  ];
+
+  stackPick(stack, 5);
+  const pick5 = stack[stack.length - 1];
+  stackCat(stack);
+  stackSha256(stack);
+
+  stackPick(stack, 9);
+  const pick9a = stack[stack.length - 1];
+  stackPick(stack, 9);
+  const pick9b = stack[stack.length - 1];
+  stackCat(stack);
+  stackSha256(stack);
+  stackCat(stack);
+
+  const roll10 = stackRoll(stack, 10);
+
+  const matchesExpectedLayout =
+    pick5 === "contractRef" &&
+    pick9a === "inputHash" &&
+    pick9b === "outputHash" &&
+    roll10 === "nonce";
+
+  return {
+    usesIndexedLegacyPreimage,
+    stateItemCount: stateItems.length,
+    pick5,
+    pick9a,
+    pick9b,
+    roll10,
+    matchesExpectedLayout,
+  };
+}
+
 function extractCodeScriptHashOp(codeScript?: string): "aa" | "ee" | "ef" | undefined {
   if (!codeScript) return;
   const match = codeScript
@@ -181,6 +297,10 @@ async function claimTokens(
     ? `${contract.script}bd${contract.codeScript}`
     : contract.script;
   const nonMinimalPush = findNonMinimalDataPush(fullContractScript);
+  const preimageStackCheck = analyzeDmintPreimageStackLayout(
+    contract.script,
+    contract.codeScript,
+  );
 
   console.debug("Pre-submit validation", {
     nonceHexLength: nonceForScriptSig.length,
@@ -192,6 +312,7 @@ async function claimTokens(
     nonMinimalPush,
     inputScriptHash,
     outputScriptHash,
+    preimageStackCheck,
   });
 
   if (nonMinimalPush) {
@@ -206,6 +327,14 @@ async function claimTokens(
       `Blocking submit: no funding inputs available for required inputHash ${inputScriptHash}`
     );
     return { success: false, error: ClaimError.MISSING_INPUTS };
+  }
+
+  if (preimageStackCheck && !preimageStackCheck.matchesExpectedLayout) {
+    console.warn(
+      "Blocking submit: dMint preimage stack layout mismatch; codeScript OP_PICK/OP_ROLL indices do not map to contractRef/inputHash/outputHash/nonce",
+      preimageStackCheck,
+    );
+    return { success: false, error: ClaimError.CONTRACT_FAIL };
   }
 
   const noncePushOp = nonceBytes.toString(16).padStart(2, "0");

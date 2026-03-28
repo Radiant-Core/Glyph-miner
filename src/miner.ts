@@ -25,13 +25,17 @@ import { ALGORITHMS, calcTimeToMine } from "./algorithms/types";
 import {
   NONCE_BYTES_V1,
   NONCE_BYTES_V2,
+  NONCE_BYTES_SHA256D_V2,
   nonceBytesForContracts,
   nonceHexForContracts,
   normalizeNonceHexForScriptSig,
+  nonceBytesForSha256d,
+  nonceHexForSha256d,
 } from "./nonce";
 
 // Import shaders as raw text
 import sha256dShaderText from "./shaders/sha256d.wgsl?raw";
+import sha256d64BitShaderText from "./shaders/sha256d_64bit.wgsl?raw";
 import blake3ShaderText from "./shaders/blake3.wgsl?raw";
 import k12ShaderText from "./shaders/k12.wgsl?raw";
 
@@ -198,11 +202,11 @@ function getAlgorithm(): AlgorithmId | undefined {
 }
 
 // Get shader code for algorithm
-function getShaderCode(algorithm: AlgorithmId): string {
+function getShaderCode(algorithm: AlgorithmId, use64Bit: boolean = false): string {
   switch (algorithm) {
     case 'blake3': return blake3ShaderText;
     case 'k12': return k12ShaderText;
-    default: return sha256dShaderText;
+    default: return use64Bit ? sha256d64BitShaderText : sha256dShaderText;
   }
 }
 
@@ -210,6 +214,11 @@ function getShaderCode(algorithm: AlgorithmId): string {
 // (midstate/target/results/nonce_offset) vs v1 3-binding (midstate/nonce/result)
 function isV2ShaderLayout(algorithm: AlgorithmId): boolean {
   return algorithm === 'blake3' || algorithm === 'k12';
+}
+
+// Check if we should use 64-bit nonce for SHA256d efficiency
+function shouldUse64BitNonce(algorithm: AlgorithmId): boolean {
+  return algorithm === 'sha256d';
 }
 
 export function updateWork(options?: { notify?: boolean }) {
@@ -494,6 +503,39 @@ function verify(target: bigint, partialPreimage: Uint8Array, nonce: string) {
   return hashMeetsTarget(hash, target);
 }
 
+// Batch verification for SHA256d solutions
+function batchVerifySha256d(
+  target: bigint, 
+  partialPreimage: Uint8Array, 
+  nonces: string[]
+): { verified: string[]; count: number } {
+  const verified: string[] = [];
+  
+  for (const nonce of nonces) {
+    if (verify(target, partialPreimage, nonce)) {
+      verified.push(nonce);
+    }
+  }
+  
+  return { verified, count: verified.length };
+}
+
+// 64-bit nonce verification for SHA256d
+function verifySha256d64(
+  target: bigint, 
+  partialPreimage: Uint8Array, 
+  nonceLow: number, 
+  nonceHigh: number
+): boolean {
+  const nonceBytes = nonceBytesForSha256d(nonceLow, nonceHigh);
+  const preimage = new Uint8Array(partialPreimage.byteLength + NONCE_BYTES_SHA256D_V2);
+  preimage.set(partialPreimage);
+  preimage.set(nonceBytes, 64);
+
+  const hash = sha256(sha256(preimage));
+  return hashMeetsTarget(hash, target);
+}
+
 function verifyK12(target: bigint, partialPreimage: Uint8Array, nonceU32: number) {
   const preimage = buildV2Preimage(partialPreimage, nonceU32);
   const hash = k12(preimage, { dkLen: 32 });
@@ -551,6 +593,7 @@ const start = async () => {
     return;
   }
   const useV2Layout = isV2ShaderLayout(algorithm);
+  const use64Bit = shouldUse64BitNonce(algorithm);
   
   let midstate = powMidstate(currentWork);
   miningStatus.value = "mining";
@@ -563,7 +606,7 @@ const start = async () => {
     throw new Error("No GPU device found.");
   }
 
-  const shaderCode = getShaderCode(algorithm);
+  const shaderCode = getShaderCode(algorithm, use64Bit);
   const module = device.createShaderModule({
     label: `${algorithm} module`,
     code: shaderCode,
@@ -741,6 +784,128 @@ const start = async () => {
         miningStatus.value = "mining";
       }
     }
+  } else if (use64Bit && algorithm === 'sha256d') {
+    // 64-bit SHA256d mining: enhanced efficiency with larger nonce space
+    const midstateBuffer = device.createBuffer({
+      label: "midstate buffer", size: 32,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    const nonceBuffer = device.createBuffer({
+      label: "nonce buffer", size: 8, // 2 u32s for 64-bit nonce
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    const resultsBuffer = device.createBuffer({
+      label: "results buffer", size: 256 * 16, // Support multiple solutions
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+    });
+
+    const bindGroup = device.createBindGroup({
+      label: "sha256d-64bit bindGroup",
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: midstateBuffer } },
+        { binding: 1, resource: { buffer: nonceBuffer } },
+        { binding: 2, resource: { buffer: resultsBuffer } },
+      ],
+    });
+
+    const gpuReadBuffer = device.createBuffer({
+      size: 1024, // Read multiple results
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+
+    device.queue.writeBuffer(midstateBuffer, 0, midstate.hash);
+
+    let nonceLow = 0;
+    let nonceHigh = 0;
+    let startTime = Date.now();
+    const maxNonceLow = 0xFFFFFFFF;
+    const maxNonceHigh = 0xFFFFFFFF;
+
+    while (miningStatus.value === "mining" || miningStatus.value === "change") {
+      if (nonceLow > maxNonceLow) {
+        nonceLow = 0;
+        nonceHigh++;
+        if (nonceHigh > maxNonceHigh) {
+          const elapsedMs = Date.now() - startTime;
+          if (elapsedMs > 0) {
+            const totalHashes = (BigInt(nonceHigh) << 32n) + BigInt(nonceLow);
+            const hashesPerSecond = (totalHashes * 1000n) / BigInt(elapsedMs);
+            hashrate.value = Number(hashesPerSecond);
+          }
+
+          const reseededWork = tryAutoReseedWork();
+          if (reseededWork) {
+            currentWork = reseededWork;
+            midstate = powMidstate(currentWork);
+            device.queue.writeBuffer(midstateBuffer, 0, midstate.hash);
+            nonceLow = 0;
+            nonceHigh = 0;
+            startTime = Date.now();
+            continue;
+          }
+
+          stopAfterNonceSpaceExhausted(algorithm);
+          break;
+        }
+      }
+
+      // Write 64-bit nonce [low, high]
+      device.queue.writeBuffer(nonceBuffer, 0, new Uint32Array([nonceLow, nonceHigh]));
+      // Clear results
+      device.queue.writeBuffer(resultsBuffer, 0, new Uint32Array(256 * 4));
+
+      const encoder = device.createCommandEncoder({ label: "sha256d-64bit encoder" });
+      const pass = encoder.beginComputePass({ label: "sha256d-64bit compute pass" });
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, bindGroup);
+      pass.dispatchWorkgroups(numWorkgroups);
+      pass.end();
+      encoder.copyBufferToBuffer(resultsBuffer, 0, gpuReadBuffer, 0, 1024);
+      device.queue.submit([encoder.finish()]);
+
+      await gpuReadBuffer.mapAsync(GPUMapMode.READ);
+      const range = new Uint32Array(gpuReadBuffer.getMappedRange());
+      const resultCount = range[0];
+      
+      if (resultCount > 0) {
+        // Collect all potential solutions for batch verification
+        const potentialNonces: string[] = [];
+        for (let i = 0; i < Math.min(resultCount, 255); i++) {
+          const foundLow = range[i * 4 + 1];
+          const foundHigh = range[i * 4 + 2];
+          const nonceHex = nonceHexForSha256d(foundLow, foundHigh);
+          potentialNonces.push(nonceHex);
+        }
+
+        // Batch verify all solutions
+        const { verified } = batchVerifySha256d(currentWork.target, midstate.preimage, potentialNonces);
+        
+        for (const nonceHex of verified) {
+          console.log(`64-bit SHA256d solution verified: ${nonceHex}`);
+          foundNonce(nonceHex);
+          addMessage({ type: "found", nonce: nonceHex });
+          found.value++;
+        }
+      }
+      
+      gpuReadBuffer.unmap();
+      nonceLow += numInvocations;
+
+      // @ts-expect-error doesn't matter
+      if (miningStatus.value === "change") {
+        updateWork();
+        console.debug("Changing work for 64-bit SHA256d");
+        if (!workSignal.value) { console.debug("Invalid work"); break; }
+        currentWork = workSignal.value;
+        reseedRound = 0;
+        midstate = powMidstate(currentWork);
+        device.queue.writeBuffer(midstateBuffer, 0, midstate.hash);
+        nonceLow = 0;
+        nonceHigh = 0;
+        miningStatus.value = "mining";
+      }
+    }
   } else {
     // V1 layout: 3 bindings (midstate/nonce/result) — SHA256d
     const midstateBuffer = device.createBuffer({
@@ -847,3 +1012,4 @@ const start = async () => {
 };
 
 export default { start, stop };
+export { batchVerifySha256d, verifySha256d64 };
