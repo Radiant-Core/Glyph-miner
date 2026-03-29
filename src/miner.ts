@@ -217,7 +217,7 @@ function isV2ShaderLayout(algorithm: AlgorithmId): boolean {
 }
 
 // Check if we should use 64-bit nonce for SHA256d efficiency
-function shouldUse64BitNonce(algorithm: AlgorithmId): boolean {
+function shouldUse64BitNonce(_algorithm: AlgorithmId): boolean {
   return false;
 }
 
