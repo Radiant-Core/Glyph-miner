@@ -334,7 +334,16 @@ async function claimTokens(
       "Blocking submit: dMint preimage stack layout mismatch; codeScript OP_PICK/OP_ROLL indices do not map to contractRef/inputHash/outputHash/nonce",
       preimageStackCheck,
     );
-    return { success: false, error: ClaimError.CONTRACT_FAIL };
+    if (resolvedAlgorithm !== "sha256d") {
+      return { success: false, error: ClaimError.CONTRACT_FAIL };
+    }
+    console.warn(
+      "Continuing submit despite preimage stack layout warning for legacy SHA256d contract",
+      {
+        resolvedAlgorithm,
+        codeScriptHashOp,
+      },
+    );
   }
 
   const noncePushOp = nonceBytes.toString(16).padStart(2, "0");

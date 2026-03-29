@@ -37,20 +37,31 @@ let timer = 0;
 let mintTimeShown = false;
 
 effect(() => {
-  if (miningStatus.value === "mining" && hashrate.value > 0 && !mintTimeShown) {
-    timer = window.setTimeout(() => {
-      if (contract.value) {
-        mintTimeShown = true;
-        addMessage({
-          type: "mint-time",
-          seconds: calcTimeToMine(contract.value.target, hashrate.value),
-        });
-      }
-    }, 10000);
-  } else {
-    clearTimeout(timer);
-    if (miningStatus.value !== "mining") {
-      mintTimeShown = false;
+  const isMining = miningStatus.value === "mining";
+  const hasPositiveHashrate = hashrate.value > 0;
+
+  if (isMining && hasPositiveHashrate) {
+    if (!mintTimeShown && timer === 0) {
+      timer = window.setTimeout(() => {
+        timer = 0;
+        if (contract.value && miningStatus.value === "mining" && hashrate.value > 0) {
+          mintTimeShown = true;
+          addMessage({
+            type: "mint-time",
+            seconds: calcTimeToMine(contract.value.target, hashrate.value),
+          });
+        }
+      }, 10000);
     }
+    return;
+  }
+
+  if (timer !== 0) {
+    clearTimeout(timer);
+    timer = 0;
+  }
+
+  if (!isMining) {
+    mintTimeShown = false;
   }
 });

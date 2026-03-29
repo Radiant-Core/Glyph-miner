@@ -218,7 +218,7 @@ function isV2ShaderLayout(algorithm: AlgorithmId): boolean {
 
 // Check if we should use 64-bit nonce for SHA256d efficiency
 function shouldUse64BitNonce(algorithm: AlgorithmId): boolean {
-  return algorithm === 'sha256d';
+  return false;
 }
 
 export function updateWork(options?: { notify?: boolean }) {
@@ -769,6 +769,10 @@ const start = async () => {
         break;
       }
       nonceStart += numInvocations;
+      const elapsedMs = Date.now() - startTime;
+      if (elapsedMs > 0 && nonceStart > 0) {
+        hashrate.value = (nonceStart / elapsedMs) * 1000;
+      }
 
       // @ts-expect-error doesn't matter
       if (miningStatus.value === "change") {
@@ -891,6 +895,11 @@ const start = async () => {
       
       gpuReadBuffer.unmap();
       nonceLow += numInvocations;
+      const elapsedMs = Date.now() - startTime;
+      if (elapsedMs > 0) {
+        const totalHashes = (BigInt(nonceHigh) << 32n) + BigInt(nonceLow);
+        hashrate.value = Number((totalHashes * 1000n) / BigInt(elapsedMs));
+      }
 
       // @ts-expect-error doesn't matter
       if (miningStatus.value === "change") {
@@ -991,6 +1000,10 @@ const start = async () => {
       device.queue.writeBuffer(resultBuffer, 0, new Uint32Array([0]));
       gpuReadBuffer.unmap();
       nonceStart += numInvocations;
+      const elapsedMs = Date.now() - startTime;
+      if (elapsedMs > 0 && nonceStart > 0) {
+        hashrate.value = (nonceStart / elapsedMs) * 1000;
+      }
 
       // @ts-expect-error doesn't matter
       if (miningStatus.value === "change") {
