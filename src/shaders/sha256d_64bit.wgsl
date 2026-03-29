@@ -1,6 +1,6 @@
 @group(0) @binding(0) var<storage, read> m: array<u32>;
 @group(0) @binding(1) var<storage, read> nonce: array<u32>; // 2 u32s: [low32, high32]
-@group(0) @binding(2) var<storage, read_write> results: array<u32>;
+@group(0) @binding(2) var<storage, read_write> results: array<atomic<u32>>;
 
 const k = array<u32, 64> (
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -327,9 +327,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // Store result: [nonceLow, nonceHigh, hash_parts...]
     let index = atomicAdd(&results[0], 1u);
     if (index < 255u) {
-      results[index * 4 + 1] = nonceLow;
-      results[index * 4 + 2] = nonceHigh;
-      results[index * 4 + 3] = v[4]; // Additional hash data for verification
+      atomicStore(&results[index * 4 + 1], nonceLow);
+      atomicStore(&results[index * 4 + 2], nonceHigh);
+      atomicStore(&results[index * 4 + 3], v[4]); // Additional hash data for verification
     }
   }
 }
