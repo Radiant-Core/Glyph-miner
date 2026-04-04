@@ -96,19 +96,40 @@ export function scriptHash(bytecode: Uint8Array): string {
  * Sub-contracts start at vout+1, vout+2, etc.
  * Returns full 72-char ref: txid(64) + vout(8, zero-padded big-endian)
  */
-export function deriveSubContractRef(tokenRef: string, subIndex: number): string {
-  const txid = tokenRef.substring(0, 64);
-  const tokenVout = parseInt(tokenRef.substring(64), 16);
-  const subVout = tokenVout + 1 + subIndex;
+export function deriveSubContractRef(
+  tokenRef: string,
+  subIndex: number,
+  startOffset = 1
+): string {
+  const normalized = normalizeRef(tokenRef);
+  const txid = normalized.substring(0, 64);
+  const tokenVout = parseInt(normalized.substring(64), 16);
+  const subVout = tokenVout + startOffset + subIndex;
   return txid + subVout.toString(16).padStart(8, "0");
+}
+
+export function deriveSubContractRefCandidates(
+  tokenRef: string,
+  subIndex: number
+): string[] {
+  const fromTokenVout = deriveSubContractRef(tokenRef, subIndex, 0);
+  const fromTokenVoutPlusOne = deriveSubContractRef(tokenRef, subIndex, 1);
+
+  return fromTokenVout === fromTokenVoutPlusOne
+    ? [fromTokenVout]
+    : [fromTokenVout, fromTokenVoutPlusOne];
 }
 
 /**
  * Normalize a compact ref (variable-length vout) to full 72-char format.
  */
 export function normalizeRef(ref: string): string {
-  const txid = ref.substring(0, 64);
-  const vout = parseInt(ref.substring(64), 16);
+  const normalized = ref.toLowerCase().replace(/[^0-9a-f]/g, "");
+  const txid = normalized.substring(0, 64);
+  const vout = parseInt(normalized.substring(64), 16);
+  if (!Number.isFinite(vout)) {
+    return normalized;
+  }
   return txid + vout.toString(16).padStart(8, "0");
 }
 

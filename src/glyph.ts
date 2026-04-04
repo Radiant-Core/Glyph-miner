@@ -74,12 +74,26 @@ export function parseDmintMetadata(payload: Record<string, unknown>): {
   const dmint = payload.dmint as Record<string, unknown> | undefined;
   if (!dmint) return undefined;
 
+  const toBigIntValue = (value: unknown): bigint | undefined => {
+    if (typeof value === "bigint") return value;
+    if (typeof value === "number" && Number.isFinite(value)) return BigInt(value);
+    return undefined;
+  };
+
+  const daa = dmint.daa as Record<string, unknown> | number | undefined;
+  const daaMode =
+    typeof daa === "number"
+      ? daa
+      : typeof daa === "object" && daa !== null && typeof daa.mode === "number"
+        ? daa.mode
+        : DaaModeId.FIXED;
+
   return {
     algorithm: typeof dmint.algo === 'number' ? dmint.algo : DmintAlgorithmId.SHA256D,
-    daaMode: typeof dmint.daa === 'number' ? dmint.daa : DaaModeId.FIXED,
-    maxSupply: typeof dmint.max === 'bigint' ? dmint.max : undefined,
-    reward: typeof dmint.reward === 'bigint' ? dmint.reward : undefined,
-    difficulty: typeof dmint.diff === 'bigint' ? dmint.diff : undefined,
+    daaMode,
+    maxSupply: toBigIntValue(dmint.maxHeight ?? dmint.max),
+    reward: toBigIntValue(dmint.reward),
+    difficulty: toBigIntValue(dmint.diff),
   };
 }
 
@@ -246,10 +260,48 @@ export function burnScript(ref: string) {
 }
 
 export function parseDmintScript(script: string): string {
-  const pattern =
-    /^(.*)bd5175c0c855797ea8597959797ea87e5a7a7e(?:aa|ee|ef)bc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551$/;
-  const [, stateScript] = script.match(pattern) || [];
-  return stateScript;
+  const DMINT_BYTECODE_PART_B =
+    "bc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551";
+
+  const isDmintCodeScript = (codeScript: string): boolean => {
+    const normalized = codeScript.toLowerCase();
+    return (
+      normalized.startsWith("5175c0c8") &&
+      normalized.endsWith(DMINT_BYTECODE_PART_B) &&
+      /7a7e(?:aa|ee|ef)bc01147f/.test(normalized)
+    );
+  };
+
+  const normalizedScript = script.toLowerCase();
+  let searchStart = 0;
+
+  while (searchStart < normalizedScript.length) {
+    const index = normalizedScript.indexOf("bd5175c0c8", searchStart);
+    if (index === -1) {
+      break;
+    }
+
+    const stateScript = normalizedScript.substring(0, index);
+    const codeScript = normalizedScript.substring(index + 2);
+    if (isDmintCodeScript(codeScript)) {
+      return stateScript;
+    }
+
+    searchStart = index + 2;
+  }
+
+  return "";
+}
+
+function mapDaaModeId(modeId: number): Contract["daaMode"] | undefined {
+  switch (modeId) {
+    case DaaModeId.FIXED: return "fixed";
+    case DaaModeId.EPOCH: return "epoch";
+    case DaaModeId.ASERT: return "asert";
+    case DaaModeId.LWMA: return "lwma";
+    case DaaModeId.SCHEDULE: return "schedule";
+    default: return;
+  }
 }
 
 export function parseBurnScript(script: string): string {
@@ -326,11 +378,32 @@ export async function parseContractTx(tx: Transaction, ref: string) {
         return;
       }
 
-      const [height, maxHeight, reward, target, v5, v6, v7] = numbers as bigint[];
-      const hasAlgoId = numbers.length >= 7;
-      const algoId = hasAlgoId ? v5 : undefined;
-      const lastTime = hasAlgoId ? v6 : v5;
-      const targetTime = hasAlgoId ? v7 : v6;
+      const [height, maxHeight, reward, target, v5, v6, v7, ...vRest] = numbers as bigint[];
+
+      const isKnownAlgoId = typeof v5 === "bigint" && v5 >= 0n && v5 <= 4n;
+      const isKnownDaaMode = typeof v6 === "bigint" && v6 >= 0n && v6 <= 4n;
+      const enhancedFormat = isKnownAlgoId && isKnownDaaMode;
+
+      let algoId: bigint | undefined;
+      let lastTime: bigint | undefined;
+      let targetTime: bigint | undefined;
+      let daaMode: Contract["daaMode"];
+      let daaParams: bigint[] | undefined;
+
+      if (enhancedFormat) {
+        algoId = v5;
+        daaMode = mapDaaModeId(Number(v6));
+        const parsedDaaParams = [v7, ...vRest].filter(
+          (value): value is bigint => typeof value === "bigint"
+        );
+        daaParams = parsedDaaParams.length ? parsedDaaParams : undefined;
+      } else {
+        const hasAlgoId = numbers.length >= 7;
+        algoId = hasAlgoId ? v5 : undefined;
+        lastTime = hasAlgoId ? v6 : v5;
+        targetTime = hasAlgoId ? v7 : v6;
+      }
+
       return {
         state: "active",
         params: {
@@ -345,6 +418,8 @@ export async function parseContractTx(tx: Transaction, ref: string) {
           algoId,
           lastTime,
           targetTime,
+          daaMode,
+          daaParams,
           script,
           codeScript,
           message,

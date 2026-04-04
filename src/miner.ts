@@ -132,11 +132,16 @@ export function mapAlgorithmId(algoId: number): AlgorithmId | undefined {
 }
 
 export function extractCodeScriptHashOp(codeScript?: string): "aa" | "ee" | "ef" | undefined {
-  if (!codeScript) return;
-  const match = codeScript
-    .toLowerCase()
-    .match(/7ea87e5a7a7e(aa|ee|ef)bc01147f/);
-  return match?.[1] as "aa" | "ee" | "ef" | undefined;
+  if (!codeScript) {
+    return undefined;
+  }
+
+  const normalized = codeScript.toLowerCase();
+  const match = normalized.match(/7a7e(aa|ee|ef)bc01147f/);
+  if (!match) {
+    return undefined;
+  }
+  return match[1] as "aa" | "ee" | "ef" | undefined;
 }
 
 export function mapHashOpToAlgorithm(hashOp?: "aa" | "ee" | "ef"): AlgorithmId | undefined {

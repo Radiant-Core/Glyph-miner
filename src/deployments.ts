@@ -3,7 +3,7 @@ import localforage from "localforage";
 import { fetchToken } from "./glyph";
 import { contractsUrl, useIndexerApi } from "./signals";
 import { ContractGroup, Token } from "./types";
-import { arrayChunks, deriveSubContractRef } from "./utils";
+import { arrayChunks, deriveSubContractRefCandidates } from "./utils";
 import { fetchRef } from "./client";
 import { 
   fetchContractsSimple, 
@@ -340,11 +340,17 @@ async function probeSubContractExists(
   }
 
   try {
-    const ref = deriveSubContractRef(tokenRef, index);
-    const history = await fetchRef(ref);
-    const exists = history.length > 0;
-    seen.set(index, exists);
-    return exists;
+    const refs = deriveSubContractRefCandidates(tokenRef, index);
+    for (const ref of refs) {
+      const history = await fetchRef(ref);
+      if (history.length > 0) {
+        seen.set(index, true);
+        return true;
+      }
+    }
+
+    seen.set(index, false);
+    return false;
   } catch (e) {
     console.debug(`Contract count probe failed for ${tokenRef} @${index}:`, e);
     seen.set(index, null);

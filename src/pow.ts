@@ -45,10 +45,23 @@ export function createWork(
 
   const inputScript = p2pkh.bytecode;
   const outputScript = new Uint8Array(mintMessageScript(message).toBuffer());
+  const codeAsm = contract.codeScript
+    ? Script.fromHex(contract.codeScript).toASM()
+    : "";
+  const usesIndexedPreimageTxid =
+    codeAsm.includes("OP_OUTPOINTTXHASH OP_10 OP_PICK") &&
+    codeAsm.includes("OP_14 OP_PICK OP_14 OP_PICK") &&
+    codeAsm.includes("OP_15 OP_ROLL");
+  const txidForPow = usesIndexedPreimageTxid
+    ? contract.location
+    : swapEndianness(contract.location);
+  const refForPow = usesIndexedPreimageTxid
+    ? contract.tokenRef
+    : contract.contractRef;
 
   return {
-    txid: hexToBytes(swapEndianness(contract.location)),
-    contractRef: hexToBytes(contract.contractRef),
+    txid: hexToBytes(txidForPow),
+    contractRef: hexToBytes(refForPow),
     inputScript,
     outputScript,
     target: contract.target,

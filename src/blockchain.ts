@@ -24,7 +24,7 @@ import miner, { updateWork } from "./miner";
 import {
   reverseRef,
   scriptHash,
-  deriveSubContractRef,
+  deriveSubContractRefCandidates,
   push4bytes,
 } from "./utils";
 import { broadcast, client, fetchRef, fetchTx } from "./client";
@@ -54,7 +54,13 @@ let subscriptionCheckTimer: ReturnType<typeof setTimeout>;
 // Timer to periodically update the contract in case of subscription failure
 let contractCheckTimer: ReturnType<typeof setTimeout>;
 
-let nonces: string[] = [];
+type PendingNonce = {
+  nonce: string;
+  work: Work;
+  contract: Contract;
+};
+
+let nonces: PendingNonce[] = [];
 
 // Ready will be true when there is no pending token claim
 let ready: boolean = true;
@@ -193,8 +199,53 @@ function extractCodeScriptHashOp(codeScript?: string): "aa" | "ee" | "ef" | unde
   if (!codeScript) return;
   const match = codeScript
     .toLowerCase()
-    .match(/7ea87e5a7a7e(aa|ee|ef)bc01147f/);
+    .match(/7a7e(aa|ee|ef)bc01147f/);
   return match?.[1] as "aa" | "ee" | "ef" | undefined;
+}
+
+function shouldIncludeOutputIndexInUnlockingScript(
+  stateScriptHex: string,
+  codeScriptHex?: string,
+): boolean {
+  void stateScriptHex;
+  if (!codeScriptHex) {
+    return true;
+  }
+
+  const asm = Script.fromHex(codeScriptHex).toASM();
+
+  const usesIndexedOp10Preimage =
+    asm.includes("OP_OUTPOINTTXHASH OP_10 OP_PICK") &&
+    asm.includes("OP_14 OP_PICK OP_14 OP_PICK") &&
+    asm.includes("OP_15 OP_ROLL");
+
+  if (usesIndexedOp10Preimage) {
+    return true;
+  }
+
+  // Indexed preimage contracts (e.g. OP_10/14/15 template) expect unlocking
+  // stack = nonce,inputHash,outputHash,outputIndex. Omitting outputIndex causes
+  // stack underflow at deeper OP_PICK/OP_ROLL indices.
+  return true;
+}
+
+function unlockingOutputIndexOpcodeHex(codeScriptHex?: string): string {
+  if (!codeScriptHex) {
+    return "00";
+  }
+
+  const asm = Script.fromHex(codeScriptHex).toASM();
+  const usesIndexedOp10Preimage =
+    asm.includes("OP_OUTPOINTTXHASH OP_10 OP_PICK") &&
+    asm.includes("OP_14 OP_PICK OP_14 OP_PICK") &&
+    asm.includes("OP_15 OP_ROLL");
+
+  // This template hashes the message OP_RETURN output script (index 2 in tx layout).
+  if (usesIndexedOp10Preimage) {
+    return "52"; // OP_2
+  }
+
+  return "00"; // OP_0 (legacy behavior)
 }
 
 function mapHashOpToAlgorithm(hashOp?: "aa" | "ee" | "ef"): AlgorithmId | undefined {
@@ -289,6 +340,10 @@ async function claimTokens(
   const resolvedAlgorithm = work.algorithm || contract.algorithm || codeScriptAlgo;
   const nonceBytes = nonceBytesForAlgorithm(resolvedAlgorithm);
   const nonceForScriptSig = normalizeNonceHex(nonce, nonceBytes);
+  const includeOutputIndexInUnlockingScript = shouldIncludeOutputIndexInUnlockingScript(
+    contract.script,
+    contract.codeScript,
+  );
   const inputScriptHash = bytesToHex(sha256(sha256(work.inputScript)));
   const outputScriptHash = bytesToHex(sha256(sha256(work.outputScript)));
   const fundingInputCount = utxos.value.length;
@@ -306,6 +361,7 @@ async function claimTokens(
     nonceHexLength: nonceForScriptSig.length,
     nonceByteLength: nonceForScriptSig.length / 2,
     nonceMode: `${nonceBytes}-byte`,
+    includeOutputIndexInUnlockingScript,
     fundingInputCount,
     fundingInputsMatchInputHash,
     codeScriptHashOp,
@@ -347,7 +403,10 @@ async function claimTokens(
   }
 
   const noncePushOp = nonceBytes.toString(16).padStart(2, "0");
-  const scriptSigHex = `${noncePushOp}${nonceForScriptSig}20${inputScriptHash}20${outputScriptHash}00`;
+  const outputIndexOpcodeHex = unlockingOutputIndexOpcodeHex(contract.codeScript);
+  const scriptSigHex = includeOutputIndexInUnlockingScript
+    ? `${noncePushOp}${nonceForScriptSig}20${inputScriptHash}20${outputScriptHash}${outputIndexOpcodeHex}`
+    : `${noncePushOp}${nonceForScriptSig}20${inputScriptHash}20${outputScriptHash}`;
   const scriptSig = Script.fromHex(scriptSigHex);
 
   const tx = new Transaction();
@@ -658,17 +717,24 @@ async function mintedOut(location: string) {
 
   // Scan forward from the next sub-contract
   for (let i = currentSubIndex + 1; i < currentSubIndex + 64; i++) {
-    const candidateRef = deriveSubContractRef(beTokenRef, i);
-    try {
-      const token = await fetchToken(candidateRef);
-      if (token && token.contract.height < token.contract.maxHeight) {
-        addMessage({ type: "general", msg: `Auto-switching to sub-contract ${i + 1}` });
-        selectedContract.value = candidateRef;
-        changeToken(candidateRef);
-        miningEnabled.value = true;
-        return;
+    const candidateRefs = deriveSubContractRefCandidates(beTokenRef, i);
+    let hadLookupError = false;
+    for (const candidateRef of candidateRefs) {
+      try {
+        const token = await fetchToken(candidateRef);
+        if (token && token.contract.height < token.contract.maxHeight) {
+          addMessage({ type: "general", msg: `Auto-switching to sub-contract ${i + 1}` });
+          selectedContract.value = candidateRef;
+          changeToken(candidateRef);
+          miningEnabled.value = true;
+          return;
+        }
+      } catch {
+        hadLookupError = true;
       }
-    } catch {
+    }
+
+    if (hadLookupError) {
       // No more sub-contracts found, stop scanning
       break;
     }
@@ -676,18 +742,20 @@ async function mintedOut(location: string) {
 
   // Also try from the beginning in case earlier sub-contracts became available
   for (let i = 0; i < currentSubIndex; i++) {
-    const candidateRef = deriveSubContractRef(beTokenRef, i);
-    try {
-      const token = await fetchToken(candidateRef);
-      if (token && token.contract.height < token.contract.maxHeight) {
-        addMessage({ type: "general", msg: `Auto-switching to sub-contract ${i + 1}` });
-        selectedContract.value = candidateRef;
-        changeToken(candidateRef);
-        miningEnabled.value = true;
-        return;
+    const candidateRefs = deriveSubContractRefCandidates(beTokenRef, i);
+    for (const candidateRef of candidateRefs) {
+      try {
+        const token = await fetchToken(candidateRef);
+        if (token && token.contract.height < token.contract.maxHeight) {
+          addMessage({ type: "general", msg: `Auto-switching to sub-contract ${i + 1}` });
+          selectedContract.value = candidateRef;
+          changeToken(candidateRef);
+          miningEnabled.value = true;
+          return;
+        }
+      } catch {
+        continue;
       }
-    } catch {
-      continue;
     }
   }
 
@@ -698,7 +766,24 @@ async function mintedOut(location: string) {
 }
 
 export function foundNonce(nonce: string) {
-  nonces.push(nonce);
+  if (!contract.value || !work.value) {
+    return;
+  }
+
+  const workSnapshot: Work & { algorithm?: AlgorithmId } = {
+    ...work.value,
+    txid: new Uint8Array(work.value.txid),
+    contractRef: new Uint8Array(work.value.contractRef),
+    inputScript: new Uint8Array(work.value.inputScript),
+    outputScript: new Uint8Array(work.value.outputScript),
+    algorithm: (work.value as Work & { algorithm?: AlgorithmId }).algorithm,
+  };
+
+  nonces.push({
+    nonce,
+    work: workSnapshot,
+    contract: { ...contract.value },
+  });
 
   if (ready) {
     submit();
@@ -707,19 +792,21 @@ export function foundNonce(nonce: string) {
 
 async function submit() {
   console.debug("Submitting", { nonceCount: nonces.length, ready, contract: !!contract.value, work: !!work.value });
-  const nonce = nonces.pop();
+  const pending = nonces.pop();
 
   // TODO handle multiple nonces, if one fails try the next
   nonces = [];
 
-  if (!contract.value || !work.value || !nonce) {
+  if (!pending) {
     return;
   }
 
-  const codeScriptHashOp = extractCodeScriptHashOp(contract.value.codeScript);
+  const { nonce, contract: pendingContract, work: pendingWork } = pending;
+
+  const codeScriptHashOp = extractCodeScriptHashOp(pendingContract.codeScript);
   const codeScriptAlgo = mapHashOpToAlgorithm(codeScriptHashOp);
   const resolvedAlgorithm =
-    work.value.algorithm || contract.value.algorithm || codeScriptAlgo;
+    pendingWork.algorithm || pendingContract.algorithm || codeScriptAlgo;
   const nonceBytes = nonceBytesForAlgorithm(resolvedAlgorithm);
   console.debug("Submit context", {
     nonceHexLength: nonce.length,
@@ -731,7 +818,7 @@ async function submit() {
 
   ready = false;
 
-  const result = await claimTokens(contract.value, work.value, nonce);
+  const result = await claimTokens(pendingContract, pendingWork, nonce);
   if (result.success) {
     const { txid } = result;
     accepted.value++;
@@ -749,23 +836,23 @@ async function submit() {
     acceptedLocations = acceptedLocations.slice(-20);
 
     // Set the new location now instead of waiting for the subscription
-    const height = contract.value.height + 1n;
-    if (height === contract.value.maxHeight) {
+    const height = pendingContract.height + 1n;
+    if (height === pendingContract.maxHeight) {
       mintedOut(txid);
     } else {
       console.debug(`Changed location to ${txid}`);
       contract.value = {
-        ...contract.value,
+        ...pendingContract,
         height,
         location: txid,
         outputIndex: 0,
-        target: result.nextContractState?.target ?? contract.value.target,
-        lastTime: result.nextContractState?.lastTime ?? contract.value.lastTime,
+        target: result.nextContractState?.target ?? pendingContract.target,
+        lastTime: result.nextContractState?.lastTime ?? pendingContract.lastTime,
       };
       miningStatus.value = "change";
     }
 
-    if (balance.value < 0.0001 + Number(contract.value.reward) / 100000000) {
+    if (balance.value < 0.0001 + Number(pendingContract.reward) / 100000000) {
       addMessage({ type: "general", msg: "Balance is low" });
       miner.stop();
       miningEnabled.value = false;
@@ -800,11 +887,11 @@ async function submit() {
         addMessage({ type: "stop" });
       } else {
         console.debug("Contract fail context", {
-          algorithm: (work.value as (Work & { algorithm?: string }) | undefined)?.algorithm,
-          codeScriptHashOp: extractCodeScriptHashOp(contract.value?.codeScript),
+          algorithm: pendingWork.algorithm,
+          codeScriptHashOp: extractCodeScriptHashOp(pendingContract.codeScript),
           nonce,
-          inputScriptHash: work.value ? bytesToHex(sha256(sha256(work.value.inputScript))) : undefined,
-          outputScriptHash: work.value ? bytesToHex(sha256(sha256(work.value.outputScript))) : undefined,
+          inputScriptHash: bytesToHex(sha256(sha256(pendingWork.inputScript))),
+          outputScriptHash: bytesToHex(sha256(sha256(pendingWork.outputScript))),
         });
         rejectMessage("contract execution failed");
       }

@@ -15,7 +15,18 @@ let warnedGetContractsUnsupported = false;
 const extendedContractsCache = new Map<string, ExtendedContract>();
 
 function normalizeRef(ref: string): string {
-  return ref.toLowerCase().replace(/[^0-9a-f]/g, "");
+  const normalized = ref.toLowerCase().replace(/[^0-9a-f]/g, "");
+  if (normalized.length <= 64) {
+    return normalized;
+  }
+
+  const txid = normalized.substring(0, 64);
+  const vout = Number.parseInt(normalized.substring(64), 16);
+  if (!Number.isFinite(vout)) {
+    return normalized;
+  }
+
+  return txid + vout.toString(16).padStart(8, "0");
 }
 
 function isUnsupportedMethodError(message: string): boolean {

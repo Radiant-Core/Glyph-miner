@@ -8,6 +8,9 @@ import { parseDmintScript } from '../../glyph';
 const DMINT_CODE_SCRIPT_SUFFIX =
   'bd5175c0c855797ea8597959797ea87e5a7a7e__OP__bc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551';
 
+const DMINT_DYNAMIC_CODE_SCRIPT_SUFFIX =
+  'bd5175c0c855797ea85901027e5a797ea87e5c7a7e__OP__bc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551';
+
 const STATE_SCRIPT_PREFIX =
   '0100000000d8' +
   '11'.repeat(36) +
@@ -20,6 +23,16 @@ describe('dMint Token Structure', () => {
     it('should parse SHA256d, Blake3, and K12 contract scripts', () => {
       const scripts = ['aa', 'ee', 'ef'].map((op) =>
         `${STATE_SCRIPT_PREFIX}${DMINT_CODE_SCRIPT_SUFFIX.replace('__OP__', op)}`
+      );
+
+      scripts.forEach((script) => {
+        expect(parseDmintScript(script)).toBe(STATE_SCRIPT_PREFIX);
+      });
+    });
+
+    it('should parse newer dynamic preimage codeScript variants from Photonic', () => {
+      const scripts = ['aa', 'ee', 'ef'].map((op) =>
+        `${STATE_SCRIPT_PREFIX}${DMINT_DYNAMIC_CODE_SCRIPT_SUFFIX.replace('__OP__', op)}`
       );
 
       scripts.forEach((script) => {

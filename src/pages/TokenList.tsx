@@ -10,7 +10,7 @@ import { SearchIcon, TriangleDownIcon, TriangleUpIcon, CloseIcon } from "@chakra
 import { FaQuestionCircle } from "react-icons/fa";
 import { LuRefreshCw } from "react-icons/lu";
 import { Link, useNavigate } from "react-router-dom";
-import { deriveSubContractRef } from "../utils";
+import { deriveSubContractRefCandidates } from "../utils";
 import { miningEnabled, miningStatus, selectedContract } from "../signals";
 import miner from "../miner";
 import { addMessage } from "../message";
@@ -94,18 +94,20 @@ function SummaryRow({ item, showContracts }: { item: ContractSummaryItem; showCo
       const numToTry = 64;
       let loaded = false;
 
-      for (let i = 0; i < numToTry; i++) {
-        const candidateRef = deriveSubContractRef(item.ref, i);
-        try {
-          const token = await fetchToken(candidateRef);
-          if (token && token.contract.height < token.contract.maxHeight) {
-            selectedContract.value = candidateRef;
-            changeToken(candidateRef);
-            loaded = true;
-            break;
+      for (let i = 0; i < numToTry && !loaded; i++) {
+        const candidateRefs = deriveSubContractRefCandidates(item.ref, i);
+        for (const candidateRef of candidateRefs) {
+          try {
+            const token = await fetchToken(candidateRef);
+            if (token && token.contract.height < token.contract.maxHeight) {
+              selectedContract.value = candidateRef;
+              changeToken(candidateRef);
+              loaded = true;
+              break;
+            }
+          } catch {
+            continue;
           }
-        } catch {
-          continue;
         }
       }
 
