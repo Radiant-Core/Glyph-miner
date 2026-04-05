@@ -229,23 +229,10 @@ function shouldIncludeOutputIndexInUnlockingScript(
   return true;
 }
 
-function unlockingOutputIndexOpcodeHex(codeScriptHex?: string): string {
-  if (!codeScriptHex) {
-    return "00";
-  }
-
-  const asm = Script.fromHex(codeScriptHex).toASM();
-  const usesIndexedOp10Preimage =
-    asm.includes("OP_OUTPOINTTXHASH OP_10 OP_PICK") &&
-    asm.includes("OP_14 OP_PICK OP_14 OP_PICK") &&
-    asm.includes("OP_15 OP_ROLL");
-
-  // This template hashes the message OP_RETURN output script (index 2 in tx layout).
-  if (usesIndexedOp10Preimage) {
-    return "52"; // OP_2
-  }
-
-  return "00"; // OP_0 (legacy behavior)
+function unlockingOutputIndexOpcodeHex(_codeScriptHex?: string): string {
+  // outputIndex tells the contract which output holds the continuation state.
+  // The tx always places the contract continuation at output 0.
+  return "00"; // OP_0
 }
 
 function mapHashOpToAlgorithm(hashOp?: "aa" | "ee" | "ef"): AlgorithmId | undefined {
@@ -498,6 +485,8 @@ async function claimTokens(
     nonce: nonceForScriptSig,
     algorithm: resolvedAlgorithm,
     codeScriptHashOp,
+    workPreimageTxid: bytesToHex(work.txid),
+    workPreimageRef: bytesToHex(work.contractRef),
     target: contract.target.toString(),
     nextTarget: nextContractState?.target?.toString(),
     nextLastTime: nextContractState?.lastTime?.toString(),
