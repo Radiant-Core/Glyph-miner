@@ -342,6 +342,8 @@ export default function TokenList() {
             <Select
               value={algorithm}
               onChange={e => setAlgorithm(e.target.value)}
+              aria-label="Filter by algorithm"
+              title="Filter by algorithm"
               maxW={{ base: "100%", md: "220px" }}
               bg="bg.100"
               border="1px solid"

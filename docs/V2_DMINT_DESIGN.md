@@ -1,37 +1,37 @@
 # Glyph v2 dMint Design Specification
 
-**Version:** 2.0  
-**Date:** February 2026  
-**Status:** Draft — Updated for Hard Fork (on-chain PoW for all algorithms)  
-**Depends on:** Glyph v2 Token Standard Whitepaper, REP-3010, Radiant V2 Hard Fork  
-**Master Plan:** [Radiant V2 Hard Fork Upgrade Plan](../../../Desktop/Misc%20Ecosystem%20Documents/Radiant_V2_Hard_Fork_Upgrade_Plan.md)  
+**Version:** 3.0  
+**Date:** April 2026  
+**Status:** Active — Complete V2 bytecode specification with on-chain DAA  
 
 ---
 
 ## 1. Overview
 
-This document defines the exact byte layout, CBOR metadata format, contract variants,
-indexer behavior, and miner integration for Glyph v2 decentralized minting (dMint).
+This document defines the exact byte layout, CBOR metadata format, contract bytecodes,
+on-chain DAA algorithms, and miner integration for Glyph v2 decentralized minting (dMint).
 
 ### 1.1 Design Constraints
 
 1. **v1 backward compatibility**: Existing v1 dMint tokens MUST continue to work unchanged
-2. **Fully on-chain PoW**: Hard fork adds `OP_BLAKE3` (0xee) and `OP_K12` (0xef) opcodes,
-   enabling on-chain validation for all supported algorithms
-3. **On-chain DAA**: `OP_LSHIFT`/`OP_RSHIFT` enabled in hard fork, allowing ASERT-lite
-   difficulty adjustment computed entirely in script
-4. **Nonce format**: 8 bytes (2×u32) — proven in v1 implementation
-5. **Trustless**: No indexer dependency for PoW validation or DAA — indexer is analytics only
-6. **No griefing**: On-chain PoW prevents state consumption without valid work
+2. **ALL new contracts are V2**: Even sha256d+fixed uses V2 format for forward compatibility
+3. **Fully on-chain PoW**: `OP_BLAKE3` (0xee) and `OP_K12` (0xef) opcodes validate all algorithms
+4. **On-chain DAA**: `OP_LSHIFT`/`OP_RSHIFT` + `OP_MUL`/`OP_DIV` compute difficulty adjustment in-script
+5. **nLockTime required**: DAA contracts read `OP_TXLOCKTIME` (0xc5) for timestamp
+6. **Nonce format**: 8 bytes (2×u32) — proven in v1 implementation
+7. **Trustless**: No indexer dependency for PoW validation or DAA — indexer is analytics only
+8. **No griefing**: On-chain PoW prevents state consumption without valid work
 
 ### 1.2 Contract Variants
 
 | Variant | PoW On-Chain | Algorithms | DAA | Use Case |
 |---------|-------------|------------|-----|----------|
-| **v1 contract** | SHA256d (OP_HASH256) | SHA256d only | Fixed | v1 tokens, v2 SHA256d fixed |
-| **v2-sha256d** | SHA256d (OP_HASH256) | SHA256d | On-chain | v2 SHA256d with DAA |
-| **v2-blake3** | Blake3 (OP_BLAKE3) | Blake3 | On-chain | v2 Blake3 tokens |
-| **v2-k12** | K12 (OP_K12) | KangarooTwelve | On-chain | v2 K12 tokens |
+| **v1 contract** | SHA256d (OP_HASH256) | SHA256d only | Fixed | Legacy v1 tokens only |
+| **v2-sha256d** | SHA256d (OP_HASH256) | SHA256d | On-chain | ALL new SHA256d tokens |
+| **v2-blake3** | Blake3 (OP_BLAKE3) | Blake3 | On-chain | Blake3 tokens |
+| **v2-k12** | K12 (OP_K12) | KangarooTwelve | On-chain | K12 tokens |
+
+> **Note:** V1 contracts are no longer generated. All new contracts use V2 format.
 
 ---
 
@@ -244,95 +244,287 @@ Difficulty interpolates linearly between breakpoints.
 
 ---
 
-## 4. v2 Contract Variants (Fully On-Chain — Hard Fork)
+## 4. v2 Contract Specification (Fully On-Chain — Hard Fork)
 
 > **Architecture change:** The Radiant V2 hard fork adds `OP_BLAKE3` (0xee) and
-> `OP_K12` (0xef) opcodes plus enables `OP_LSHIFT`/`OP_RSHIFT`. This eliminates the
-> need for indexer-based PoW validation. ALL algorithms are validated on-chain.
+> `OP_K12` (0xef) opcodes plus enables `OP_LSHIFT`/`OP_RSHIFT`. ALL algorithms are
+> validated on-chain. ALL new contracts use the V2 format.
 
 ### 4.1 Decision Matrix
 
-| Token Config | Contract Bytecode | PoW Opcode | DAA |
-|-------------|-------------------|-----------|-----|
-| v1 token (no `dmint` in CBOR) | v1 bytecode | OP_HASH256 | Fixed (on-chain) |
-| v2 + algo=SHA256d + daa=fixed | v1 bytecode | OP_HASH256 | Fixed (on-chain) |
-| v2 + algo=SHA256d + daa=dynamic | v2-sha256d bytecode | OP_HASH256 | On-chain DAA |
-| v2 + algo=blake3 | v2-blake3 bytecode | **OP_BLAKE3** | On-chain DAA |
-| v2 + algo=k12 | v2-k12 bytecode | **OP_K12** | On-chain DAA |
+| Token Config | Contract Format | PoW Opcode | DAA |
+|-------------|----------------|-----------|-----|
+| v1 token (no `dmint` in CBOR) | **v1** (legacy) | OP_HASH256 | Fixed (on-chain) |
+| v2 + algo=SHA256d + daa=fixed | **v2** | OP_HASH256 | Fixed (on-chain) |
+| v2 + algo=SHA256d + daa=asert | **v2** | OP_HASH256 | ASERT (on-chain) |
+| v2 + algo=blake3 + any daa | **v2** | **OP_BLAKE3** | On-chain DAA |
+| v2 + algo=k12 + any daa | **v2** | **OP_K12** | On-chain DAA |
 
-### 4.2 v2 Contract Output Script
+> **V1 is read-only.** Photonic Wallet and Glyph Miner still parse and mine V1 contracts
+> for backward compatibility, but all newly created contracts use V2 format.
+
+### 4.2 V2 State Layout (Reordered)
+
+The V2 state layout places **mutable DAA fields at the end** (top of stack) so the
+PoW comparison and DAA computation work with natural stack access:
 
 ```
-┌─────────────────────── State Data ───────────────────────┐
-│ <height:4B>                                              │
-│ OP_PUSHINPUTREFSINGLETON(d8) <contractRef:36B>           │
-│ OP_PUSHINPUTREF(d0) <tokenRef:36B>                       │
-│ <maxHeight:minimal>                                      │
-│ <reward:minimal>                                         │
-│ <target:minimal>                                         │
-│ <algoId:1B>       (0x00=sha256d, 0x01=blake3, 0x02=k12) │
-│ <lastTime:4B>     (unix timestamp of last mint)          │
-│ <targetTime:minimal> (target seconds between mints)      │
+┌─────────────────────── State Data (10 items) ────────────┐
+│  1. <height:4B>           (mutable: incremented each mint)│
+│  2. d8 <contractRef:36B>  (immutable: singleton ref)      │
+│  3. d0 <tokenRef:36B>     (immutable: token ref)          │
+│  4. <maxHeight:minimal>   (immutable: max mint count)     │
+│  5. <reward:minimal>      (immutable: photons per mint)   │
+│  6. <algoId:minimal>      (immutable: 0=sha256d/1=b3/2=k12)│
+│  7. <daaMode:minimal>     (immutable: 0=fixed/1=epoch/2=asert/3=lwma)│
+│  8. <targetTime:minimal>  (immutable: target secs between mints)│
+│  9. <lastTime:4B>         (mutable: timestamp of last mint)│
+│ 10. <target:minimal>      (mutable: current PoW target)   │
 ├─────────────────────── Separator ────────────────────────┤
-│ OP_STATESEPARATOR(bd)                                    │
-├─────────────────────── Bytecode ─────────────────────────┤
-│ <v2_contract_bytecode> (validates algorithm-specific PoW │
-│  + state transitions + on-chain DAA + token rewards)     │
+│ OP_STATESEPARATOR (bd)                                    │
+├─────────────────────── Bytecode (immutable) ─────────────┤
+│ Part A: Preimage construction + <powHashOp>               │
+│ Part B: PoW check + DAA computation + stack cleanup       │
+│ Part C: Output validation (code script continuity +       │
+│         token reward + height/maxHeight checks)           │
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Key differences from v1:**
-- `algoId` byte identifies which hash opcode the bytecode uses
-- `lastTime` (4B) stores the previous mint's timestamp for DAA
-- `targetTime` stores the desired seconds between mints (DAA parameter)
-- Contract bytecode uses the algorithm-specific opcode (OP_HASH256 / OP_BLAKE3 / OP_K12)
-- Contract bytecode computes DAA target adjustment using OP_LSHIFT/OP_RSHIFT
-- **ALL validation is on-chain — no indexer dependency**
+**Key design decisions:**
+- **`target` at end (position 0)**: Directly below PoW `value` on stack — PoW comparison is natural
+- **`lastTime` at position 1**: DAA reads it with `OP_1 PICK` after txlocktime push
+- **`targetTime` at position 2**: DAA reads it with `OP_PICK` at correct depth
+- **`daaMode` in state**: For indexer/parser identification (bytecode encodes it implicitly too)
+- **`halfLife`, `asymptote` in bytecode**: Immutable constants pushed in code section, NOT state items
+- **`lastTime` initialized to creation block timestamp**: Prevents extreme drift on first mint
 
-### 4.3 v2 Contract Bytecode Requirements
+**Comparison with v1:**
 
-The v2 contract bytecode MUST:
-1. Validate PoW: `algorithm_hash(preimage + nonce) < target`
-   - SHA256d: `OP_HASH256`, first 4 bytes zero, next 8 bytes < target
-   - Blake3: `OP_BLAKE3`, full 32-byte hash < target (256-bit comparison)
-   - K12: `OP_K12`, full 32-byte hash < target (256-bit comparison)
-2. Verify `new_height = old_height + 1`
-3. Verify contractRef singleton is preserved in output
-4. Verify tokenRef output is created with correct reward
-5. Verify output script matches input script (except mutable state fields)
-6. Verify `height < maxHeight`
-7. Compute DAA: read `OP_TXLOCKTIME`, compute `time_delta = now - lastTime`,
-   adjust target using `OP_LSHIFT`/`OP_RSHIFT` (ASERT-lite) or `OP_MUL`/`OP_DIV` (linear)
-8. Store updated target, timestamp in output state
+| Field | V1 Position | V2 Position | Notes |
+|-------|------------|------------|-------|
+| height | 0 (bottom) | 0 (bottom) | Same |
+| contractRef | 1 | 1 | Same |
+| tokenRef | 2 | 2 | Same |
+| maxHeight | 3 | 3 | Same |
+| reward | 4 | 4 | Same |
+| target | 5 (top) | **9 (top)** | Moved to end |
+| algoId | — | 5 | New in V2 |
+| daaMode | — | 6 | New in V2 |
+| targetTime | — | 7 | New in V2 |
+| lastTime | — | 8 | New in V2 |
 
-### 4.4 On-Chain DAA (ASERT-lite)
+### 4.3 V2 Bytecode Structure
 
-The contract computes difficulty adjustment using integer arithmetic:
+The V2 bytecode is composed of three parts, with the DAA section varying by mode:
 
 ```
-// Read time from spending transaction
-current_time = OP_TXLOCKTIME
-
-// Compute time delta
-time_delta = current_time - lastTime
-
-// ASERT-lite: discrete power-of-2 adjustment
-// drift = (time_delta - targetTime) / halfLife  (integer division)
-// if drift > 0: new_target = old_target OP_LSHIFT drift  (easier)
-// if drift < 0: new_target = old_target OP_RSHIFT (-drift)  (harder)
-// if drift == 0: new_target = old_target  (unchanged)
-
-// Clamp: max shift of ±4 per mint to prevent extreme swings
-// Clamp: target must stay within [MIN_TARGET, MAX_TARGET]
+┌─── Part A: Preimage Construction ─────────────────────────┐
+│ OP_1 OP_DROP                     // padding (v1 compat)    │
+│ OP_INPUTINDEX OP_OUTPOINTTXHASH  // push txHash            │
+│ <contractRefPickIndex> OP_PICK   // copy contractRef       │
+│ OP_CAT OP_SHA256                 // sha256(txHash||cRef)   │
+│ <ioPickIndex> OP_PICK            // copy inputHash         │
+│ <ioPickIndex> OP_PICK            // copy outputHash        │
+│ OP_CAT OP_SHA256                 // sha256(iH||oH)         │
+│ OP_CAT                           // concat both halves     │
+│ <nonceRollIndex> OP_ROLL         // move nonce to top      │
+│ OP_CAT                           // full preimage          │
+│ <powHashOp>                      // OP_HASH256/BLAKE3/K12  │
+├─── Part B: PoW Check + DAA ───────────────────────────────┤
+│ B.1: Hash extraction (reverse, split, zeros check)         │
+│ B.2: Target comparison (preserve target for DAA)           │
+│ B.3: DAA computation (mode-specific, see §4.4–4.6)        │
+│ B.4: Stack cleanup (drop V2 extras to 8-item V1 base)     │
+├─── Part C: Output Validation ─────────────────────────────┤
+│ (Same as V1: code script continuity, token reward,         │
+│  height/maxHeight, singleton preservation)                 │
+└───────────────────────────────────────────────────────────┘
 ```
 
-**Fallback (Linear DAA)** — simpler, uses only OP_MUL/OP_DIV:
+**Part A indices** for `stateItemCount = 10`:
+
+| Index | Formula | V1 (6 items) | V2 (10 items) |
+|-------|---------|-------------|--------------|
+| contractRefPickIndex | stateItemCount - 1 | 5 | **9** |
+| inputOutputPickIndex | stateItemCount + 3 | 9 | **13** |
+| nonceRollIndex | stateItemCount + 4 | 10 | **14** |
+
+**Stack after Part A + powHashOp** (14 items):
+```
+pos 0:  hash_result (32 bytes)
+pos 1:  target              ← V2 top state item
+pos 2:  lastTime
+pos 3:  targetTime
+pos 4:  daaMode
+pos 5:  algoId
+pos 6:  reward
+pos 7:  maxHeight
+pos 8:  tokenRef
+pos 9:  contractRef
+pos 10: height
+pos 11: outputIndex         ← scriptSig items
+pos 12: outputHash
+pos 13: inputHash
+```
+(nonce was consumed by OP_ROLL + OP_CAT)
+
+### 4.3.1 Part B.1: PoW Hash Extraction (shared, all modes)
+
+Same as V1. Extracts the numeric PoW value from the hash:
+
+```
+Hex:  bc 01 14 7f 77 58 7f 04 00000000 88 81 76 00 a2 69
+ASM:  OP_REVERSEBYTES
+      OP_PUSH(0x14)          // push 20
+      OP_SPLIT               // split reversed hash at byte 20
+      OP_NIP                 // keep right part (12 bytes = hash[0..11] reversed)
+      OP_8                   // push 8
+      OP_SPLIT               // split: left=value(8B), right=firstFourBytes(4B)
+      OP_PUSH(0x00000000)    // push 4 zero bytes
+      OP_EQUALVERIFY         // require first 4 bytes are zero
+      OP_BIN2NUM             // convert 8-byte value to script number
+      OP_DUP                 // duplicate value
+      OP_0                   // push 0
+      OP_GREATERTHANOREQUAL  // value >= 0
+      OP_VERIFY              // require non-negative
+```
+
+**Stack after B.1:** `[..., target, value]` (value at pos 0, target at pos 1)
+
+### 4.3.2 Part B.2: Target Comparison with Preservation (V2)
+
+V2 preserves `target` on the stack for DAA computation:
+
+```
+Hex:  51 79 7c a2 69
+ASM:  OP_1 OP_PICK       // copy target (pos 1) → [target_copy, value, target, ...]
+      OP_SWAP             // → [value, target_copy, target, ...]
+      OP_GREATERTHANOREQUAL  // target_copy >= value (= value <= target)
+      OP_VERIFY           // require PoW is valid
+```
+
+**Stack after B.2:** `[target, lastTime, targetTime, daaMode, algoId, reward, maxHeight, tokenRef, contractRef, height, outputIndex, outputHash, inputHash]` (13 items)
+
+### 4.3.3 Part B.4: Stack Cleanup (shared, all modes)
+
+After DAA computation (or no-op for fixed mode), drop the 5 V2 extras to
+normalize the stack to the V1 8-item base for Part C:
+
+```
+Hex:  75 75 75 75 75
+ASM:  OP_DROP OP_DROP OP_DROP OP_DROP OP_DROP
+```
+
+Items dropped: `new_target` (or unchanged target), `lastTime`, `targetTime`, `daaMode`, `algoId`
+
+**Stack after cleanup:** `[reward, maxHeight, tokenRef, contractRef, height, outputIndex, outputHash, inputHash]` (8 items — same as V1)
+
+### 4.4 DAA Mode: Fixed (daaMode = 0x00)
+
+No DAA computation. Target never changes.
+
+**Part B.3 bytecode:** *(empty — 0 bytes)*
+
+The full Part B for fixed mode:
+```
+B.1 (extraction):  bc01147f77587f040000000088817600a269
+B.2 (comparison):  51797ca269
+B.3 (DAA):         (empty)
+B.4 (cleanup):     7575757575
+```
+
+### 4.5 DAA Mode: ASERT-Lite (daaMode = 0x02) — Recommended Default
+
+On-chain ASERT-lite uses `OP_LSHIFT`/`OP_RSHIFT` for power-of-2 adjustments.
+`halfLife` is embedded as a bytecode constant (not a state item).
+
+**Part B.3 ASERT bytecode** (entry stack: `[target, lastTime, targetTime, daaMode, ...]`):
+
+```
+// ── Step 1: Read current timestamp ──────────────────────
+c5                   // OP_TXLOCKTIME → push currentTime from nLockTime
+                     // Stack: [currentTime, target, lastTime, targetTime, ...]
+
+// ── Step 2: time_delta = currentTime - lastTime ─────────
+52 79                // OP_2 PICK: copy lastTime (pos 2)
+94                   // OP_SUB: currentTime - lastTime = time_delta
+                     // Stack: [time_delta, target, lastTime, targetTime, ...]
+
+// ── Step 3: excess = time_delta - targetTime ────────────
+53 79                // OP_3 PICK: copy targetTime (pos 3)
+94                   // OP_SUB: time_delta - targetTime = excess
+                     // Stack: [excess, target, lastTime, targetTime, ...]
+
+// ── Step 4: drift = excess / halfLife ───────────────────
+<pushMinimal(halfLife)>  // bytecode constant (e.g. 02 1027 for 10000)
+96                   // OP_DIV: excess / halfLife = drift
+                     // Stack: [drift, target, lastTime, targetTime, ...]
+
+// ── Step 5: Clamp drift to [-4, +4] ────────────────────
+76 54 a0             // DUP, OP_4, GT: drift > 4?
+63                   // IF
+  75 54              //   DROP drift, push 4 (clamp to +4)
+68                   // ENDIF
+76 54 81 9f          // DUP, OP_4, NEGATE, LT: drift < -4?
+63                   // IF
+  75 54 81           //   DROP drift, push -4 (clamp to -4)
+68                   // ENDIF
+                     // Stack: [clamped_drift, target, lastTime, targetTime, ...]
+
+// ── Step 6: Apply shift to target ───────────────────────
+//   OP_LSHIFT: (x n -- x<<n), OP_RSHIFT: (x n -- x>>n)
+//   drift > 0 → easier (target increases)
+//   drift < 0 → harder (target decreases)
+//   drift = 0 → unchanged
+76 00 a0             // DUP drift, push 0, GT: drift > 0?
+63                   // IF (drift > 0)
+  98                 //   OP_LSHIFT: target << drift → new_target
+67                   // ELSE
+  76 00 9f           //   DUP drift, push 0, LT: drift < 0?
+  63                 //   IF (drift < 0)
+    81 99            //     NEGATE → |drift|, OP_RSHIFT: target >> |drift|
+  67                 //   ELSE (drift == 0)
+    75               //     DROP drift, target unchanged
+  68                 //   ENDIF
+68                   // ENDIF
+                     // Stack: [new_target, lastTime, targetTime, daaMode, ...]
+
+// ── Step 7: Clamp target to minimum 1 ──────────────────
+76 51 9f             // DUP, OP_1, LT: new_target < 1?
+63                   // IF
+  75 51              //   DROP, push 1
+68                   // ENDIF
+                     // Stack: [clamped_new_target, lastTime, targetTime, daaMode, ...]
+```
+
+**ASERT opcode budget:** ~50 bytes + halfLife push. Well within limits.
+
+### 4.6 DAA Mode: Linear (daaMode = 0x03)
+
+Simpler alternative using `OP_MUL`/`OP_DIV`:
+
 ```
 new_target = old_target * time_delta / targetTime
-// Clamp to [MIN_TARGET, MAX_TARGET]
 ```
 
-### 4.5 Security Properties
+**Part B.3 Linear bytecode** (entry stack: `[target, lastTime, targetTime, daaMode, ...]`):
+
+```
+c5                   // OP_TXLOCKTIME → currentTime
+52 79                // OP_2 PICK lastTime
+94                   // OP_SUB → time_delta
+                     // Stack: [time_delta, target, lastTime, targetTime, ...]
+7c                   // OP_SWAP → [target, time_delta, lastTime, targetTime, ...]
+95                   // OP_MUL → [target * time_delta, lastTime, targetTime, ...]
+53 79                // OP_3 PICK targetTime (shifted by consumed items)
+96                   // OP_DIV → [new_target, lastTime, targetTime, ...]
+// Clamp to minimum 1
+76 51 9f 63 75 51 68
+```
+
+**Linear opcode budget:** ~20 bytes.
+
+### 4.7 Security Properties
 
 | Property | v1 Contract | v2 Contract |
 |----------|------------|------------|
@@ -341,7 +533,27 @@ new_target = old_target * time_delta / targetTime
 | Trustless verification | ✅ | ✅ |
 | SPV-provable mints | ✅ | ✅ |
 | DAA manipulation | N/A (fixed) | Bounded by clamp (±4 shift/mint) |
-| Timestamp gaming | N/A | ≤2hr window (consensus bounded) |
+| Timestamp gaming | N/A | ≤2hr window (consensus MTP bounded) |
+| State continuity | Code script hash | Code script hash |
+
+### 4.8 Radiant Opcodes Used by V2 Contracts
+
+| Opcode | Hex | Purpose |
+|--------|-----|---------|
+| OP_TXLOCKTIME | 0xc5 | Read nLockTime (DAA timestamp source) |
+| OP_INPUTINDEX | 0xc0 | Get active input index |
+| OP_OUTPOINTTXHASH | 0xc8 | Get txid from input outpoint |
+| OP_ACTIVEBYTECODE | 0xc1 | Read current input's full script |
+| OP_OUTPUTBYTECODE | 0xcd | Read output script by index |
+| OP_STATESCRIPTBYTECODE_OUTPUT | 0xec | Read output state script by index |
+| OP_CODESCRIPTHASHOUTPUTCOUNT_UTXOS | 0xe5 | Count inputs by code script hash |
+| OP_CODESCRIPTHASHOUTPUTCOUNT_OUTPUTS | 0xe6 | Count outputs by code script hash |
+| OP_HASH256 | 0xaa | SHA256d hash (PoW + integrity) |
+| OP_BLAKE3 | 0xee | Blake3 hash (PoW) |
+| OP_K12 | 0xef | KangarooTwelve hash (PoW) |
+| OP_LSHIFT | 0x98 | Left shift (ASERT target increase) |
+| OP_RSHIFT | 0x99 | Right shift (ASERT target decrease) |
+| OP_STATESEPARATOR | 0xbd | State/code boundary |
 
 ---
 

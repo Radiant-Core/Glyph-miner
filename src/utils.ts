@@ -60,6 +60,9 @@ export function arrayChunks<T = unknown>(arr: T[], chunkSize: number) {
 }
 
 export function opcodeToNum(n: string) {
+  // radiantjs ASM shows OP_0 (0x00) as '0', not 'OP_0'
+  if (n === '0') return 0n;
+
   if (n.startsWith("OP_")) {
     const num = pushNumberOpcodeToNumber(Opcodes[n as keyof typeof Opcodes]);
     if (num === false) return false;

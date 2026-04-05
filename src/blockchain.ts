@@ -26,6 +26,7 @@ import {
   scriptHash,
   deriveSubContractRefCandidates,
   push4bytes,
+  pushMinimal,
 } from "./utils";
 import { broadcast, client, fetchRef, fetchTx } from "./client";
 import { Contract, Work, Utxo, AlgorithmId } from "./types";
@@ -124,14 +125,38 @@ function getStateItemsFromScriptHex(stateScriptHex: string): string[] | undefine
     return;
   }
 
-  const height = tokens[0];
-  const contractRef = tokens[singletonIndex + 1];
-  const tokenRef = tokens[refIndex + 1];
+  // Use semantic labels so the stack simulation can verify PICK/ROLL correctness.
+  // The actual hex values don't matter for layout validation — only positions do.
   const tail = tokens.slice(refIndex + 2);
-  return [height, contractRef, tokenRef, ...tail];
+  const labeledTail = tail.map((_, i) => `stateItem${i}`);
+  return ["height", "contractRef", "tokenRef", ...labeledTail];
 }
 
-function analyzeDmintPreimageStackLayout(
+function parsePreimageIndicesFromCodeAsm(codeAsm: string): {
+  contractRefPickIndex: number;
+  ioPickIndex: number;
+  nonceRollIndex: number;
+} | undefined {
+  // Match pattern: OP_OUTPOINTTXHASH <N> OP_PICK ... <M> OP_PICK <M> OP_PICK ... <R> OP_ROLL
+  const match = codeAsm.match(
+    /OP_OUTPOINTTXHASH\s+(OP_\d+|\d+)\s+OP_PICK\s+OP_CAT\s+OP_SHA256\s+(OP_\d+|\d+)\s+OP_PICK\s+(OP_\d+|\d+)\s+OP_PICK\s+OP_CAT\s+OP_SHA256\s+OP_CAT\s+(OP_\d+|\d+)\s+OP_ROLL/
+  );
+  if (!match) return;
+
+  const parseOpNum = (token: string): number => {
+    if (/^OP_\d+$/.test(token)) return Number(token.slice(3));
+    if (token === 'OP_0') return 0;
+    return parseInt(token, 10);
+  };
+
+  return {
+    contractRefPickIndex: parseOpNum(match[1]),
+    ioPickIndex: parseOpNum(match[2]),
+    nonceRollIndex: parseOpNum(match[4]),
+  };
+}
+
+export function analyzeDmintPreimageStackLayout(
   stateScriptHex: string,
   codeScriptHex?: string,
 ): DmintPreimageStackCheck | undefined {
@@ -140,12 +165,9 @@ function analyzeDmintPreimageStackLayout(
   }
 
   const codeAsm = Script.fromHex(codeScriptHex).toASM();
-  const usesIndexedLegacyPreimage =
-    codeAsm.includes("OP_OUTPOINTTXHASH OP_5 OP_PICK") &&
-    codeAsm.includes("OP_9 OP_PICK OP_9 OP_PICK") &&
-    codeAsm.includes("OP_10 OP_ROLL");
+  const indices = parsePreimageIndicesFromCodeAsm(codeAsm);
 
-  if (!usesIndexedLegacyPreimage) {
+  if (!indices) {
     return;
   }
 
@@ -163,39 +185,39 @@ function analyzeDmintPreimageStackLayout(
     "outpointTxHash",
   ];
 
-  stackPick(stack, 5);
-  const pick5 = stack[stack.length - 1];
+  stackPick(stack, indices.contractRefPickIndex);
+  const pickContractRef = stack[stack.length - 1];
   stackCat(stack);
   stackSha256(stack);
 
-  stackPick(stack, 9);
-  const pick9a = stack[stack.length - 1];
-  stackPick(stack, 9);
-  const pick9b = stack[stack.length - 1];
+  stackPick(stack, indices.ioPickIndex);
+  const pickInputHash = stack[stack.length - 1];
+  stackPick(stack, indices.ioPickIndex);
+  const pickOutputHash = stack[stack.length - 1];
   stackCat(stack);
   stackSha256(stack);
   stackCat(stack);
 
-  const roll10 = stackRoll(stack, 10);
+  const rollNonce = stackRoll(stack, indices.nonceRollIndex);
 
   const matchesExpectedLayout =
-    pick5 === "contractRef" &&
-    pick9a === "inputHash" &&
-    pick9b === "outputHash" &&
-    roll10 === "nonce";
+    pickContractRef === "contractRef" &&
+    pickInputHash === "inputHash" &&
+    pickOutputHash === "outputHash" &&
+    rollNonce === "nonce";
 
   return {
-    usesIndexedLegacyPreimage,
+    usesIndexedLegacyPreimage: true,
     stateItemCount: stateItems.length,
-    pick5,
-    pick9a,
-    pick9b,
-    roll10,
+    pick5: pickContractRef,
+    pick9a: pickInputHash,
+    pick9b: pickOutputHash,
+    roll10: rollNonce,
     matchesExpectedLayout,
   };
 }
 
-function extractCodeScriptHashOp(codeScript?: string): "aa" | "ee" | "ef" | undefined {
+export function extractCodeScriptHashOp(codeScript?: string): "aa" | "ee" | "ef" | undefined {
   if (!codeScript) return;
   const match = codeScript
     .toLowerCase()
@@ -229,13 +251,13 @@ function shouldIncludeOutputIndexInUnlockingScript(
   return true;
 }
 
-function unlockingOutputIndexOpcodeHex(_codeScriptHex?: string): string {
+export function unlockingOutputIndexOpcodeHex(_codeScriptHex?: string): string {
   // outputIndex tells the contract which output holds the continuation state.
   // The tx always places the contract continuation at output 0.
   return "00"; // OP_0
 }
 
-function mapHashOpToAlgorithm(hashOp?: "aa" | "ee" | "ef"): AlgorithmId | undefined {
+export function mapHashOpToAlgorithm(hashOp?: "aa" | "ee" | "ef"): AlgorithmId | undefined {
   switch (hashOp) {
     case "aa":
       return "sha256d";
@@ -248,7 +270,7 @@ function mapHashOpToAlgorithm(hashOp?: "aa" | "ee" | "ef"): AlgorithmId | undefi
   }
 }
 
-function nonceBytesForAlgorithm(algorithm?: AlgorithmId): 4 | 8 {
+export function nonceBytesForAlgorithm(algorithm?: AlgorithmId): 4 | 8 {
   return algorithm === "blake3" || algorithm === "k12" ? 8 : 4;
 }
 
@@ -256,7 +278,7 @@ function normalizeNonceHex(nonceHex: string, nonceBytes: 4 | 8): string {
   return normalizeNonceHexForScriptSig(nonceHex, nonceBytes);
 }
 
-function findNonMinimalDataPush(scriptHex: string): string | undefined {
+export function findNonMinimalDataPush(scriptHex: string): string | undefined {
   const asm = Script.fromHex(scriptHex).toASM();
   const parts = asm.split(" ");
 
@@ -278,16 +300,108 @@ type NextContractState = {
   lastTime?: bigint;
 };
 
-function buildNextContractState(
+function daaModeToId(mode?: string): bigint {
+  switch (mode) {
+    case 'fixed': return 0n;
+    case 'epoch': return 1n;
+    case 'asert': return 2n;
+    case 'lwma': return 3n;
+    case 'schedule': return 4n;
+    default: return 0n;
+  }
+}
+
+export function computeAsertTarget(
+  oldTarget: bigint,
+  lastTime: bigint,
+  currentTime: bigint,
+  targetTime: bigint,
+  halfLife: bigint,
+): bigint {
+  const timeDelta = currentTime - lastTime;
+  const excess = timeDelta - targetTime;
+  let drift = excess / halfLife; // integer division (truncates toward zero in bigint)
+
+  // Clamp drift to [-4, +4]
+  if (drift > 4n) drift = 4n;
+  if (drift < -4n) drift = -4n;
+
+  let newTarget: bigint;
+  if (drift > 0n) {
+    newTarget = oldTarget << drift;
+  } else if (drift < 0n) {
+    newTarget = oldTarget >> (-drift);
+  } else {
+    newTarget = oldTarget;
+  }
+
+  // Clamp to minimum 1
+  if (newTarget < 1n) newTarget = 1n;
+  return newTarget;
+}
+
+export function computeLinearTarget(
+  oldTarget: bigint,
+  lastTime: bigint,
+  currentTime: bigint,
+  targetTime: bigint,
+): bigint {
+  const timeDelta = currentTime - lastTime;
+  let newTarget = (oldTarget * timeDelta) / targetTime;
+  if (newTarget < 1n) newTarget = 1n;
+  return newTarget;
+}
+
+export function isV2Contract(contract: Contract): boolean {
+  return contract.algoId !== undefined && contract.daaMode !== undefined;
+}
+
+export function buildNextContractState(
   contract: Contract,
-  newHeight: bigint
+  newHeight: bigint,
+  txLockTime?: number,
 ): NextContractState {
-  // contract.script stores the mutable state section. Replace only the first
-  // 4-byte height push and preserve the rest exactly as-is.
+  if (isV2Contract(contract) && contract.codeScript) {
+    // V2: reconstruct full state script with updated mutable fields
+    const currentTime = BigInt(txLockTime || Math.floor(Date.now() / 1000));
+    const oldTarget = contract.target;
+    const lastTime = contract.lastTime ?? currentTime;
+    const targetTime = contract.targetTime ?? 60n;
+
+    // Compute DAA-adjusted target
+    let newTarget = oldTarget;
+    if (contract.daaMode === 'asert') {
+      // halfLife is embedded in bytecode, not state — use daaParams or default
+      const halfLife = BigInt(contract.daaParams?.halfLife || 3600);
+      newTarget = computeAsertTarget(oldTarget, lastTime, currentTime, targetTime, halfLife);
+    } else if (contract.daaMode === 'lwma') {
+      newTarget = computeLinearTarget(oldTarget, lastTime, currentTime, targetTime);
+    }
+    // fixed mode: newTarget = oldTarget (no change)
+
+    const nextStateScript = [
+      push4bytes(Number(newHeight)),
+      `d8${contract.contractRef}`,
+      `d0${contract.tokenRef}`,
+      pushMinimal(contract.maxHeight),
+      pushMinimal(contract.reward),
+      pushMinimal(contract.algoId ?? 0n),
+      pushMinimal(daaModeToId(contract.daaMode)),
+      pushMinimal(targetTime),
+      push4bytes(Number(currentTime)),
+      pushMinimal(newTarget),
+    ].join('');
+
+    return {
+      script: `${nextStateScript}bd${contract.codeScript}`,
+      target: newTarget,
+      lastTime: currentTime,
+    };
+  }
+
+  // V1: just replace height, preserve everything else
   const nextStateScript = `${push4bytes(Number(newHeight))}${contract.script.substring(10)}`;
 
-  // If codeScript was parsed from chain, preserve it exactly so algorithm/DAA
-  // specific bytecode remains unchanged.
   if (contract.codeScript) {
     return {
       script: `${nextStateScript}bd${contract.codeScript}`,
@@ -296,7 +410,7 @@ function buildNextContractState(
     };
   }
 
-  // Legacy fallback for older parsed contracts without codeScript.
+  // Legacy fallback for older parsed contracts without codeScript
   return {
     script: dMintScript({
       ...contract,
@@ -405,6 +519,13 @@ async function claimTokens(
   const privKey = wallet.value.privKey;
   const reward = Number(contract.reward);
 
+  // V2 DAA contracts require nLockTime for OP_TXLOCKTIME timestamp
+  const needsNLockTime = isV2Contract(contract) && contract.daaMode !== 'fixed';
+  const txLockTime = needsNLockTime ? Math.floor(Date.now() / 1000) : 0;
+  if (txLockTime > 0) {
+    (tx as any).nLockTime = txLockTime;
+  }
+
   tx.addInput(
     new Transaction.Input({
       prevTxId: contract.location,
@@ -431,7 +552,7 @@ async function claimTokens(
   });
 
   const nextContractState = !lastMint
-    ? buildNextContractState(contract, newHeight)
+    ? buildNextContractState(contract, newHeight, txLockTime || undefined)
     : undefined;
 
   if (lastMint) {

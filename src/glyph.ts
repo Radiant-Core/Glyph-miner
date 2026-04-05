@@ -246,6 +246,7 @@ export function dMintScript({
   reward,
   target,
 }: Contract) {
+  // V1 legacy fallback — only used when codeScript is unavailable
   return `${push4bytes(
     Number(height)
   )}d8${contractRef}d0${tokenRef}${pushMinimal(maxHeight)}${pushMinimal(
@@ -259,17 +260,36 @@ export function burnScript(ref: string) {
   return `d8${ref}6a`;
 }
 
-export function parseDmintScript(script: string): string {
-  const DMINT_BYTECODE_PART_B =
-    "bc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551";
+// V1 Part B: PoW extraction + target comparison + output validation (no DAA)
+const V1_BYTECODE_PART_B =
+  "bc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551";
 
+// V2 Part B.1: PoW hash extraction (shared)
+const V2_BYTECODE_PART_B1 = "bc01147f77587f040000000088817600a269";
+// V2 Part B.2: Target comparison with preservation
+const V2_BYTECODE_PART_B2 = "51797ca269";
+// V2 Part B.4: Stack cleanup (5x OP_DROP)
+const V2_BYTECODE_PART_B4 = "7575757575";
+// V2 Part C: Output validation (same as V1 Part C)
+const V2_BYTECODE_PART_C =
+  "a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551";
+
+export function parseDmintScript(script: string): string {
   const isDmintCodeScript = (codeScript: string): boolean => {
     const normalized = codeScript.toLowerCase();
-    return (
-      normalized.startsWith("5175c0c8") &&
-      normalized.endsWith(DMINT_BYTECODE_PART_B) &&
-      /7a7e(?:aa|ee|ef)bc01147f/.test(normalized)
-    );
+    if (!normalized.startsWith("5175c0c8")) return false;
+    if (!/7a7e(?:aa|ee|ef)/.test(normalized)) return false;
+
+    // V1: ends with V1_BYTECODE_PART_B
+    if (normalized.endsWith(V1_BYTECODE_PART_B)) return true;
+
+    // V2: has B.1+B.2 after powHashOp, B.4 cleanup, and ends with Part C
+    const hasV2PartB = normalized.includes(V2_BYTECODE_PART_B1 + V2_BYTECODE_PART_B2);
+    const hasV2Cleanup = normalized.includes(V2_BYTECODE_PART_B4);
+    const endsWithPartC = normalized.endsWith(V2_BYTECODE_PART_C);
+    if (hasV2PartB && hasV2Cleanup && endsWithPartC) return true;
+
+    return false;
   };
 
   const normalizedScript = script.toLowerCase();
@@ -357,8 +377,9 @@ export async function parseContractTx(tx: Transaction, ref: string) {
 
   const message = messages[0] || "";
 
-  // State script:
-  // height OP_PUSHINPUTREF contractRef OP_PUSHINPUTREF tokenRef maxHeight reward target
+  // State script parsing:
+  // V1: height | contractRef | tokenRef | maxHeight | reward | target (6 items)
+  // V2: height | contractRef | tokenRef | maxHeight | reward | algoId | daaMode | targetTime | lastTime | target (10 items)
   const contracts = stateScripts
     .map(([outputIndex, script, codeScript]) => {
       const opcodes = Script.fromHex(script).toASM().split(" ");
@@ -373,35 +394,42 @@ export async function parseContractTx(tx: Transaction, ref: string) {
         return;
       }
 
-      const numbers = opcodes.map(opcodeToNum).filter((v) => v !== false);
+      const numbers = opcodes.map(opcodeToNum).filter((v) => v !== false) as bigint[];
       if (numbers.length < 4) {
         return;
       }
 
-      const [height, maxHeight, reward, target, v5, v6, v7, ...vRest] = numbers as bigint[];
-
-      const isKnownAlgoId = typeof v5 === "bigint" && v5 >= 0n && v5 <= 4n;
-      const isKnownDaaMode = typeof v6 === "bigint" && v6 >= 0n && v6 <= 4n;
-      const enhancedFormat = isKnownAlgoId && isKnownDaaMode;
-
+      let height: bigint;
+      let maxHeight: bigint;
+      let reward: bigint;
+      let target: bigint;
       let algoId: bigint | undefined;
       let lastTime: bigint | undefined;
       let targetTime: bigint | undefined;
       let daaMode: Contract["daaMode"];
       let daaParams: bigint[] | undefined;
 
-      if (enhancedFormat) {
-        algoId = v5;
-        daaMode = mapDaaModeId(Number(v6));
-        const parsedDaaParams = [v7, ...vRest].filter(
-          (value): value is bigint => typeof value === "bigint"
-        );
-        daaParams = parsedDaaParams.length ? parsedDaaParams : undefined;
+      // Detect V2 format: 8+ numeric items where items[3]=algoId(0-4) and [4]=daaMode(0-4)
+      const isV2 = numbers.length >= 8 &&
+        numbers[3] >= 0n && numbers[3] <= 4n &&
+        numbers[4] >= 0n && numbers[4] <= 4n;
+
+      if (isV2) {
+        // V2 layout: height, maxHeight, reward, algoId, daaMode, targetTime, lastTime, target
+        height = numbers[0];
+        maxHeight = numbers[1];
+        reward = numbers[2];
+        algoId = numbers[3];
+        daaMode = mapDaaModeId(Number(numbers[4]));
+        targetTime = numbers[5];
+        lastTime = numbers[6];
+        target = numbers[7];
       } else {
-        const hasAlgoId = numbers.length >= 7;
-        algoId = hasAlgoId ? v5 : undefined;
-        lastTime = hasAlgoId ? v6 : v5;
-        targetTime = hasAlgoId ? v7 : v6;
+        // V1 layout: height, maxHeight, reward, target
+        height = numbers[0];
+        maxHeight = numbers[1];
+        reward = numbers[2];
+        target = numbers[3];
       }
 
       return {
