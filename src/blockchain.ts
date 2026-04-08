@@ -183,6 +183,7 @@ export function analyzeDmintPreimageStackLayout(
     "outputIndex",
     ...stateItems,
     "outpointTxHash",
+    "inputBytecode",
   ];
 
   stackPick(stack, indices.contractRefPickIndex);

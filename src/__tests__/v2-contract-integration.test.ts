@@ -49,9 +49,9 @@ const DAA_MODE_IDS: Record<string, number> = { fixed: 0, epoch: 1, asert: 2, lwm
 // Replicate Photonic buildDmintPreimageBytecodePartA
 // ---------------------------------------------------------------------------
 function buildPartA(stateItemCount: number): string {
-  const contractRefPick = stateItemCount - 1;
-  const ioPick = stateItemCount + 3;
-  const nonceRoll = stateItemCount + 4;
+  const contractRefPick = stateItemCount;     // +1 for OP_INPUTBYTECODE on stack
+  const ioPick = stateItemCount + 4;          // +1 for OP_INPUTBYTECODE on stack
+  const nonceRoll = stateItemCount + 5;       // +1 for OP_INPUTBYTECODE on stack
   return [
     '51', '75', 'c0', 'c8',
     pushMinimal(contractRefPick), '79', '7e', 'a8',
@@ -311,7 +311,7 @@ describe('V2 Contract Integration: Photonic → Miner Pipeline', () => {
         expect(check!.pick5).toBe('contractRef');
         expect(check!.pick9a).toBe('inputHash');
         expect(check!.pick9b).toBe('outputHash');
-        expect(check!.roll10).toBe('nonce');
+        expect(check!.roll10).toBe('nonce'); // labels are correct regardless of pick index value
       });
     }
   });
