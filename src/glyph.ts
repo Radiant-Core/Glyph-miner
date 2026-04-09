@@ -277,7 +277,8 @@ const V2_BYTECODE_PART_C =
 export function parseDmintScript(script: string): string {
   const isDmintCodeScript = (codeScript: string): boolean => {
     const normalized = codeScript.toLowerCase();
-    if (!normalized.startsWith("5175c0c8")) return false;
+    // Accept both old (5175c0c8) and new (5175c8) Part A prefix
+    if (!normalized.startsWith("5175c8") && !normalized.startsWith("5175c0c8")) return false;
     if (!/7a7e(?:aa|ee|ef)/.test(normalized)) return false;
 
     // V1: ends with V1_BYTECODE_PART_B
@@ -296,7 +297,14 @@ export function parseDmintScript(script: string): string {
   let searchStart = 0;
 
   while (searchStart < normalizedScript.length) {
-    const index = normalizedScript.indexOf("bd5175c0c8", searchStart);
+    // Find the next occurrence of either old (bd5175c0c8) or new (bd5175c8) separator
+    const idxOld = normalizedScript.indexOf("bd5175c0c8", searchStart);
+    const idxNew = normalizedScript.indexOf("bd5175c8", searchStart);
+    let index = -1;
+    if (idxOld === -1 && idxNew === -1) break;
+    if (idxOld === -1) index = idxNew;
+    else if (idxNew === -1) index = idxOld;
+    else index = Math.min(idxOld, idxNew);
     if (index === -1) {
       break;
     }

@@ -49,11 +49,13 @@ const DAA_MODE_IDS: Record<string, number> = { fixed: 0, epoch: 1, asert: 2, lwm
 // Replicate Photonic buildDmintPreimageBytecodePartA
 // ---------------------------------------------------------------------------
 function buildPartA(stateItemCount: number): string {
-  const contractRefPick = stateItemCount;     // +1 for OP_INPUTBYTECODE on stack
-  const ioPick = stateItemCount + 4;          // +1 for OP_INPUTBYTECODE on stack
-  const nonceRoll = stateItemCount + 5;       // +1 for OP_INPUTBYTECODE on stack
+  // c8 = OP_OUTPOINTTXHASH (pushes txHash, consumed by first OP_CAT)
+  // c0 (OP_INPUTINDEX) intentionally excluded — it was a spurious extra item
+  const contractRefPick = stateItemCount - 1;
+  const ioPick = stateItemCount + 3;
+  const nonceRoll = stateItemCount + 4;
   return [
-    '51', '75', 'c0', 'c8',
+    '51', '75', 'c8',
     pushMinimal(contractRefPick), '79', '7e', 'a8',
     pushMinimal(ioPick), '79',
     pushMinimal(ioPick), '79',
@@ -210,14 +212,14 @@ describe('V2 Contract Integration: Photonic → Miner Pipeline', () => {
         expect(stateScript).not.toBe('');
 
         // stateScript should NOT contain 'bd' separator or bytecode
-        expect(stateScript).not.toContain('bd5175c0c8');
+        expect(stateScript).not.toContain('bd5175c8');
 
         // full script = stateScript + 'bd' + codeScript
         expect(fullScript.startsWith(stateScript + 'bd')).toBe(true);
 
         // codeScript should start with Part A prefix
         const codeScript = fullScript.substring(stateScript.length + 2);
-        expect(codeScript.startsWith('5175c0c8')).toBe(true);
+        expect(codeScript.startsWith('5175c8')).toBe(true);
       });
     }
   });
@@ -258,7 +260,7 @@ describe('V2 Contract Integration: Photonic → Miner Pipeline', () => {
 
         // codeScript should be preserved
         expect(c.codeScript).toBeDefined();
-        expect(c.codeScript!.startsWith('5175c0c8')).toBe(true);
+        expect(c.codeScript!.startsWith('5175c8')).toBe(true);
       });
     }
   });

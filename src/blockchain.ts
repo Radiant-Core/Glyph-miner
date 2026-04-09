@@ -183,7 +183,6 @@ export function analyzeDmintPreimageStackLayout(
     "outputIndex",
     ...stateItems,
     "outpointTxHash",
-    "inputBytecode",
   ];
 
   stackPick(stack, indices.contractRefPickIndex);
@@ -237,18 +236,17 @@ function shouldIncludeOutputIndexInUnlockingScript(
 
   const asm = Script.fromHex(codeScriptHex).toASM();
 
-  const usesIndexedOp10Preimage =
-    asm.includes("OP_OUTPOINTTXHASH OP_10 OP_PICK") &&
-    asm.includes("OP_14 OP_PICK OP_14 OP_PICK") &&
-    asm.includes("OP_15 OP_ROLL");
+  const usesV2Preimage =
+    asm.includes("OP_OUTPOINTTXHASH OP_9 OP_PICK") &&
+    asm.includes("OP_13 OP_PICK OP_13 OP_PICK") &&
+    asm.includes("OP_14 OP_ROLL");
 
-  if (usesIndexedOp10Preimage) {
+  if (usesV2Preimage) {
     return true;
   }
 
-  // Indexed preimage contracts (e.g. OP_10/14/15 template) expect unlocking
-  // stack = nonce,inputHash,outputHash,outputIndex. Omitting outputIndex causes
-  // stack underflow at deeper OP_PICK/OP_ROLL indices.
+  // All V2 contracts include outputIndex in the unlocking stack
+  // (nonce, inputHash, outputHash, outputIndex) to satisfy indexed PICK/ROLL depths.
   return true;
 }
 
