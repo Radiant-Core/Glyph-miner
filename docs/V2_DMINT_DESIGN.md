@@ -320,7 +320,7 @@ The V2 bytecode is composed of three parts, with the DAA section varying by mode
 ```
 ┌─── Part A: Preimage Construction ─────────────────────────┐
 │ OP_1 OP_DROP                     // padding (v1 compat)    │
-│ OP_INPUTINDEX OP_OUTPOINTTXHASH  // push txHash            │
+│ OP_OUTPOINTTXHASH                // push txHash (0xc8)     │
 │ <contractRefPickIndex> OP_PICK   // copy contractRef       │
 │ OP_CAT OP_SHA256                 // sha256(txHash||cRef)   │
 │ <ioPickIndex> OP_PICK            // copy inputHash         │
@@ -343,11 +343,17 @@ The V2 bytecode is composed of three parts, with the DAA section varying by mode
 
 **Part A indices** for `stateItemCount = 10`:
 
-| Index | Formula | V1 (6 items) | V2 (10 items) |
-|-------|---------|-------------|--------------|
-| contractRefPickIndex | stateItemCount - 1 | 5 | **9** |
-| inputOutputPickIndex | stateItemCount + 3 | 9 | **13** |
-| nonceRollIndex | stateItemCount + 4 | 10 | **14** |
+> **Note:** Only `OP_OUTPOINTTXHASH` (0xc8) is pushed in Part A. The previously-present
+> `OP_INPUTINDEX` (0xc0) was a spurious opcode — its value was never consumed, leaving a
+> ghost item on the stack that caused B.2's `OP_1 PICK` to read `inputIndex` instead of
+> `target`. Contracts starting with `5175c8` (no `c0`) are correct; old `5175c0c8`
+> contracts will fail to mine and must be redeployed.
+
+| Index | Formula | V2 (10 items) |
+|-------|---------|---------------|
+| contractRefPickIndex | stateItemCount - 1 | **9** |
+| inputOutputPickIndex | stateItemCount + 3 | **13** |
+| nonceRollIndex | stateItemCount + 4 | **14** |
 
 **Stack after Part A + powHashOp** (14 items):
 ```
@@ -541,8 +547,7 @@ c5                   // OP_TXLOCKTIME → currentTime
 | Opcode | Hex | Purpose |
 |--------|-----|---------|
 | OP_TXLOCKTIME | 0xc5 | Read nLockTime (DAA timestamp source) |
-| OP_INPUTINDEX | 0xc0 | Get active input index |
-| OP_OUTPOINTTXHASH | 0xc8 | Get txid from input outpoint |
+| OP_OUTPOINTTXHASH | 0xc8 | Get txid from input outpoint (Part A preimage) |
 | OP_ACTIVEBYTECODE | 0xc1 | Read current input's full script |
 | OP_OUTPUTBYTECODE | 0xcd | Read output script by index |
 | OP_STATESCRIPTBYTECODE_OUTPUT | 0xec | Read output state script by index |
