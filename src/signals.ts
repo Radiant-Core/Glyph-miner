@@ -28,6 +28,8 @@ export const mineToAddress = signal("");
 export const mintMessage = signal("");
 export const hideMessages = signal(false);
 export const contractsUrl = signal("");
+// RXinDexer REST API URL for contract discovery
+export const restApiUrl = signal("");
 // Use RXinDexer dMint API for contract discovery (with fallback to contractsUrl)
 export const useIndexerApi = signal(true);
 // Automatically mutate work entropy when full nonce-space is exhausted

@@ -5,6 +5,7 @@ import {
   hideMessages,
   mineToAddress,
   mintMessage,
+  restApiUrl,
   servers,
   useIndexerApi,
   wallet,
@@ -33,6 +34,8 @@ contractsUrl.value =
   "https://glyph-miner.com/contracts.json";
 // Default to using RXinDexer API (true unless explicitly disabled)
 useIndexerApi.value = localStorage.getItem("useIndexerApi") !== "";
+// Load RXinDexer REST API URL
+restApiUrl.value = localStorage.getItem("restApiUrl") || "";
 // Default to enabled unless explicitly disabled
 autoReseed.value = localStorage.getItem("autoReseed") !== "";
 

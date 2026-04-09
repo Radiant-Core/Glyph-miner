@@ -1,12 +1,13 @@
 /**
  * dMint Contracts API Client
  * 
- * Fetches mineable dMint contracts from RXinDexer via Electrum protocol.
+ * Fetches mineable dMint contracts from RXinDexer via REST API (primary) or Electrum protocol (fallback).
  * Uses dmint.get_contracts v2 request/response contract and maps to
  * local ExtendedContract shape for existing UI consumers.
  */
 
 import { client } from "./client";
+import { restApiUrl } from "./signals";
 
 let getContractSupported: boolean | null = null;
 let getContractsSupported: boolean | null = null;
@@ -202,11 +203,113 @@ export const DMINT_ALGORITHM = {
   K12: 0x02,
 } as const;
 
+// REST API response types
+interface RestDmintContract {
+  token_ref: string;
+  ticker?: string;
+  name?: string;
+  algorithm: { id: number; name?: string };
+  daa_mode?: { id: number; name?: string };
+  contracts?: {
+    total?: number;
+    mineable_remaining?: number | null;
+    fully_mined?: number | null;
+  };
+  supply?: {
+    total?: string;
+    minted?: string;
+    remaining?: string;
+    unit?: string;
+  };
+  reward_per_mint?: string;
+  target?: string;
+  percent_mined?: number;
+  deploy_height?: number;
+  active?: boolean;
+  is_fully_mined?: boolean;
+  icon?: {
+    type?: string | null;
+    url?: string | null;
+    data_hex?: string | null;
+  };
+}
+
+interface RestDmintResponse {
+  count: number;
+  results: RestDmintContract[];
+}
+
+/**
+ * Fetch contracts from REST API
+ */
+async function fetchFromRestApi(endpoint: string): Promise<RestDmintContract[] | null> {
+  const url = restApiUrl.value;
+  if (!url) {
+    console.warn("REST API URL not configured");
+    return null;
+  }
+
+  try {
+    const response = await fetch(`${url}${endpoint}`);
+    if (!response.ok) {
+      console.warn(`REST API request failed: ${response.status} ${response.statusText}`);
+      return null;
+    }
+
+    const data: RestDmintResponse = await response.json();
+    return data.results || [];
+  } catch (error) {
+    console.warn("Failed to fetch from REST API:", error);
+    return null;
+  }
+}
+
+/**
+ * Map REST API contract to ExtendedContract format
+ */
+function mapRestContract(rest: RestDmintContract): ExtendedContract {
+  const totalSupply = parseIntString(rest.supply?.total);
+  const minedSupply = parseIntString(rest.supply?.minted);
+  const percentMined =
+    typeof rest.percent_mined === "number"
+      ? rest.percent_mined
+      : totalSupply > 0
+        ? (minedSupply / totalSupply) * 100
+        : 0;
+
+  return {
+    ref: rest.token_ref,
+    outputs: rest.contracts?.total ?? 0,
+    ticker: rest.ticker,
+    name: rest.name,
+    algorithm: rest.algorithm?.id ?? 0,
+    difficulty: parseIntString(rest.target),
+    reward: parseIntString(rest.reward_per_mint),
+    percent_mined: percentMined,
+    active: rest.active ?? !rest.is_fully_mined,
+    deploy_height: rest.deploy_height ?? 0,
+    daa_mode: rest.daa_mode?.id ?? 0,
+    daa_mode_name: rest.daa_mode?.name,
+    icon_type: rest.icon?.type ?? undefined,
+    icon_data: rest.icon?.data_hex ?? undefined,
+    icon_url: rest.icon?.url ?? undefined,
+    total_supply: totalSupply,
+    mined_supply: minedSupply,
+  };
+}
+
 /**
  * Fetch contracts in simple tuple format: [[ref, outputs], ...]
- * Derived from dmint.get_contracts v2 token summary response.
+ * Uses REST API (primary) with Electrum RPC fallback.
  */
 export async function fetchContractsSimple(): Promise<[string, number][]> {
+  // Try REST API first
+  const restContracts = await fetchFromRestApi("/dmint/contracts?limit=5000");
+  if (restContracts && restContracts.length > 0) {
+    return restContracts.map((c) => [c.token_ref, c.contracts?.total ?? 0]);
+  }
+
+  // Fallback to Electrum RPC
   try {
     const request: DmintV2ContractsRequest = {
       version: 2,
@@ -236,8 +339,24 @@ export async function fetchContractsSimple(): Promise<[string, number][]> {
 
 /**
  * Fetch contracts in extended format with full metadata.
+ * Uses REST API (primary) with Electrum RPC fallback.
  */
 export async function fetchContractsExtended(): Promise<ExtendedContractsResponse | null> {
+  // Try REST API first
+  const restContracts = await fetchFromRestApi("/dmint/contracts?limit=5000");
+  if (restContracts && restContracts.length > 0) {
+    const mapped = restContracts.map(mapRestContract);
+    indexExtendedContracts(mapped);
+    return {
+      version: 2,
+      updated_at: new Date().toISOString(),
+      updated_height: 0,
+      count: mapped.length,
+      contracts: mapped,
+    };
+  }
+
+  // Fallback to Electrum RPC
   if (getContractsSupported === false) {
     return null;
   }

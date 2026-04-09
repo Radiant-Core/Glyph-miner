@@ -30,6 +30,7 @@ import {
   mineToAddress,
   miningStatus,
   mintMessage,
+  restApiUrl,
   servers,
   useIndexerApi,
   wallet,
@@ -86,6 +87,7 @@ export default function Settings() {
     autoReseed: autoReseed.value ? "1" : "",
     servers: servers.value.join("\n"),
     contractsUrl: contractsUrl.value,
+    restApiUrl: restApiUrl.value,
     useIndexerApi: useIndexerApi.value ? "1" : "",
   });
   const onFormChange = ({
@@ -133,6 +135,7 @@ export default function Settings() {
     hideMessages.value = form.hideMessages === "1";
     autoReseed.value = form.autoReseed === "1";
     contractsUrl.value = form.contractsUrl;
+    restApiUrl.value = form.restApiUrl;
     useIndexerApi.value = form.useIndexerApi === "1";
     servers.value = serversArray;
 
@@ -142,6 +145,7 @@ export default function Settings() {
     localStorage.setItem("autoReseed", form.autoReseed);
     localStorage.setItem("servers", JSON.stringify(serversArray));
     localStorage.setItem("contractsUrl", form.contractsUrl);
+    localStorage.setItem("restApiUrl", form.restApiUrl);
     localStorage.setItem("useIndexerApi", form.useIndexerApi);
 
     // Update work
@@ -299,6 +303,18 @@ export default function Settings() {
             </Select>
             <FormHelperText fontSize="xs">
               Fetch contracts from RXinDexer dMint API. Falls back to URL if unavailable.
+            </FormHelperText>
+          </FormControl>
+          <FormControl mb={5}>
+            <FormLabel fontWeight="semibold" fontSize="sm">RXinDexer REST API URL</FormLabel>
+            <Input
+              name="restApiUrl"
+              defaultValue={form.restApiUrl}
+              onChange={onFormChange}
+              placeholder="https://indexer.example.com/api"
+            />
+            <FormHelperText fontSize="xs">
+              REST API endpoint for contract discovery (e.g., https://indexer.example.com/api)
             </FormHelperText>
           </FormControl>
           <FormControl mb={5}>
