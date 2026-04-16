@@ -15,7 +15,7 @@ import { createWallet, openWallet } from "./wallet";
 
 const defaultServers = [
   //"wss://electrumx-testnet.radiant4people.com:53002",
-  "wss://82.180.136.182:50011",
+  "wss://radiantcore.org:50011",
   "wss://radiantus.bladenet.online:50022",
   "wss://electrumx.radiant4people.com:50022",
   "wss://radiant2.bladenet.online:50022",
@@ -35,7 +35,7 @@ contractsUrl.value =
 // Default to using RXinDexer API (true unless explicitly disabled)
 useIndexerApi.value = localStorage.getItem("useIndexerApi") !== "";
 // Load RXinDexer REST API URL
-restApiUrl.value = localStorage.getItem("restApiUrl") || "https://82.180.136.182:8000";
+restApiUrl.value = localStorage.getItem("restApiUrl") || "https://glyph-miner.com/api";
 // Default to enabled unless explicitly disabled
 autoReseed.value = localStorage.getItem("autoReseed") !== "";
 

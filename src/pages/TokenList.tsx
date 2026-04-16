@@ -7,7 +7,6 @@ import {
   Table, Tbody, Td, Th, Thead, Tr, Text,
 } from "@chakra-ui/react";
 import { SearchIcon, TriangleDownIcon, TriangleUpIcon, CloseIcon } from "@chakra-ui/icons";
-import { FaQuestionCircle } from "react-icons/fa";
 import { LuRefreshCw } from "react-icons/lu";
 import { Link, useNavigate } from "react-router-dom";
 import { deriveSubContractRefCandidates } from "../utils";
@@ -60,26 +59,28 @@ function TokenIcon({ iconType, iconData, iconUrl }: {
   iconType?: string; iconData?: string; iconUrl?: string;
 }) {
   const [blobUrl, setBlobUrl] = useState<string | undefined>();
+  const [error, setError] = useState(false);
 
   useEffect(() => {
+    setError(false);
     const u = iconDataUrl(iconType, iconData);
     setBlobUrl(u);
     return () => { if (u) URL.revokeObjectURL(u); };
   }, [iconType, iconData]);
 
   const src = blobUrl || resolveIconUrl(iconUrl);
-  if (src) {
-    return (
-      <Image
-        src={src}
-        boxSize="24px"
-        borderRadius="full"
-        objectFit="cover"
-        fallback={<Icon as={FaQuestionCircle} boxSize={5} color="gray.500" />}
-      />
-    );
+  if (!src || error) {
+    return null;
   }
-  return <Icon as={FaQuestionCircle} boxSize={5} color="gray.500" />;
+  return (
+    <Image
+      src={src}
+      boxSize="24px"
+      borderRadius="full"
+      objectFit="cover"
+      onError={() => setError(true)}
+    />
+  );
 }
 
 function SummaryRow({ item, showContracts }: { item: ContractSummaryItem; showContracts: boolean }) {
@@ -222,9 +223,11 @@ export default function TokenList() {
     setLoading(true);
     setItems(null);
     const data = await fetchContractSummaries();
-    const enriched = await enrichContractSummariesWithVerifiedCounts(data);
-    setItems(enriched);
+    setItems(data);
     setLoading(false);
+    enrichContractSummariesWithVerifiedCounts(data, (updated) => {
+      setItems([...updated]);
+    });
   }, []);
 
   useEffect(() => { doLoad(); }, [doLoad]);

@@ -57,6 +57,7 @@ export interface ExtendedContract {
   reward: number;
   percent_mined: number;
   active: boolean;
+  burned?: boolean;
   deploy_height: number;
   daa_mode?: number;
   daa_mode_name?: string;
@@ -90,6 +91,7 @@ export interface DmintV2TokenSummaryItem {
   deploy_height?: number;
   active?: boolean;
   is_fully_mined?: boolean;
+  burned?: boolean;
   icon?: {
     type?: string | null;
     url?: string | null;
@@ -160,6 +162,7 @@ function mapV2ItemToExtended(item: DmintV2TokenSummaryItem): ExtendedContract {
     reward: parseIntString(item.reward_per_mint),
     percent_mined: percentMined,
     active: item.active ?? !item.is_fully_mined,
+    burned: item.burned,
     deploy_height: item.deploy_height ?? 0,
     daa_mode: item.daa_mode?.id ?? 0,
     daa_mode_name: item.daa_mode?.name,
@@ -227,16 +230,12 @@ interface RestDmintContract {
   deploy_height?: number;
   active?: boolean;
   is_fully_mined?: boolean;
+  burned?: boolean;
   icon?: {
     type?: string | null;
     url?: string | null;
     data_hex?: string | null;
   };
-}
-
-interface RestDmintResponse {
-  count: number;
-  results: RestDmintContract[];
 }
 
 /**
@@ -256,8 +255,12 @@ async function fetchFromRestApi(endpoint: string): Promise<RestDmintContract[] |
       return null;
     }
 
-    const data: RestDmintResponse = await response.json();
-    return data.results || [];
+    const data: any = await response.json();
+    // v2 format uses 'items', v1 format uses 'contracts' or 'results'
+    if (Array.isArray(data.items)) {
+      return data.items;
+    }
+    return data.results || data.contracts || [];
   } catch (error) {
     console.warn("Failed to fetch from REST API:", error);
     return null;
@@ -287,6 +290,7 @@ function mapRestContract(rest: RestDmintContract): ExtendedContract {
     reward: parseIntString(rest.reward_per_mint),
     percent_mined: percentMined,
     active: rest.active ?? !rest.is_fully_mined,
+    burned: rest.burned,
     deploy_height: rest.deploy_height ?? 0,
     daa_mode: rest.daa_mode?.id ?? 0,
     daa_mode_name: rest.daa_mode?.name,
@@ -304,7 +308,7 @@ function mapRestContract(rest: RestDmintContract): ExtendedContract {
  */
 export async function fetchContractsSimple(): Promise<[string, number][]> {
   // Try REST API first
-  const restContracts = await fetchFromRestApi("/dmint/contracts?limit=5000");
+  const restContracts = await fetchFromRestApi("/dmint/contracts?version=2&limit=5000");
   if (restContracts && restContracts.length > 0) {
     return restContracts.map((c) => [c.token_ref, c.contracts?.total ?? 0]);
   }
@@ -343,7 +347,7 @@ export async function fetchContractsSimple(): Promise<[string, number][]> {
  */
 export async function fetchContractsExtended(): Promise<ExtendedContractsResponse | null> {
   // Try REST API first
-  const restContracts = await fetchFromRestApi("/dmint/contracts?limit=5000");
+  const restContracts = await fetchFromRestApi("/dmint/contracts?version=2&limit=5000");
   if (restContracts && restContracts.length > 0) {
     const mapped = restContracts.map(mapRestContract);
     indexExtendedContracts(mapped);

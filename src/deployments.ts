@@ -1,7 +1,7 @@
 import { swapEndianness } from "@bitauth/libauth";
 import localforage from "localforage";
 import { fetchToken } from "./glyph";
-import { contractsUrl, useIndexerApi } from "./signals";
+import { contractsUrl, restApiUrl, useIndexerApi } from "./signals";
 import { ContractGroup, Token } from "./types";
 import { arrayChunks, deriveSubContractRefCandidates } from "./utils";
 import { fetchRef } from "./client";
@@ -11,7 +11,6 @@ import {
   fetchMostProfitable,
   isDmintApiAvailable,
   ExtendedContract,
-  ExtendedContractsResponse 
 } from "./dmint-api";
 
 // Lightweight contract summary for fast list rendering
@@ -295,10 +294,18 @@ export async function getCachedTokenContracts(firstRef: string) {
  * Returns all contracts in a single HTTP request — no per-contract RPC calls.
  * Falls back to Electrum RPC extended format, then to null.
  */
-const EXTENDED_CONTRACTS_URL = "https://glyph-miner.com/contracts-extended.json";
-
 export async function fetchContractSummaries(): Promise<ContractSummaryItem[]> {
-  // Prefer Electrum RPC/API when enabled so icon metadata stays in sync.
+  // Try REST API directly first (no Electrum dependency).
+  if (useIndexerApi.value && restApiUrl.value) {
+    const response = await fetchContractsExtended();
+    if (response?.contracts?.length) {
+      const mineableContracts = response.contracts.filter(isContractMineable);
+      console.log(`Loaded ${mineableContracts.length} mineable contracts from REST API`);
+      return mineableContracts.map(mapExtendedToSummary);
+    }
+  }
+
+  // Fallback: Electrum RPC when REST is unavailable
   if (useIndexerApi.value) {
     const isAvailable = await checkApiAvailable();
     if (isAvailable) {
@@ -309,21 +316,6 @@ export async function fetchContractSummaries(): Promise<ContractSummaryItem[]> {
         return mineableContracts.map(mapExtendedToSummary);
       }
     }
-  }
-
-  // Fallback: HTTPS extended endpoint (single HTTP call)
-  try {
-    const response = await fetch(EXTENDED_CONTRACTS_URL, { signal: AbortSignal.timeout(8000) });
-    if (response.ok) {
-      const data = await response.json() as ExtendedContractsResponse;
-      if (data?.contracts?.length > 0) {
-        const mineableContracts = data.contracts.filter(isContractMineable);
-        console.log(`Fast-loaded ${mineableContracts.length} mineable contracts from extended endpoint`);
-        return mineableContracts.map(mapExtendedToSummary);
-      }
-    }
-  } catch (e) {
-    console.debug("Extended endpoint not available:", e);
   }
 
   return [];
@@ -416,7 +408,8 @@ async function deriveVerifiedContractCount(tokenRef: string): Promise<number | n
 }
 
 export async function enrichContractSummariesWithVerifiedCounts(
-  items: ContractSummaryItem[]
+  items: ContractSummaryItem[],
+  onUpdate?: (enriched: ContractSummaryItem[]) => void
 ): Promise<ContractSummaryItem[]> {
   if (!items.length) return items;
 
@@ -436,6 +429,7 @@ export async function enrichContractSummariesWithVerifiedCounts(
           ...item,
           contractCount: count,
         };
+        onUpdate?.(enriched);
       }
     }
   });
@@ -445,7 +439,11 @@ export async function enrichContractSummariesWithVerifiedCounts(
 }
 
 function isContractMineable(c: ExtendedContract): boolean {
-  return c.active && c.outputs > 0 && c.percent_mined < 100;
+  // Exclude fully mined (>=100%) or nearly mined (>99%)
+  if (c.percent_mined >= 99) return false;
+  // Exclude burned contracts
+  if (c.burned) return false;
+  return c.active && c.outputs > 0;
 }
 
 function mapExtendedToSummary(c: ExtendedContract): ContractSummaryItem {
