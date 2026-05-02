@@ -1,7 +1,7 @@
 import { swapEndianness } from "@bitauth/libauth";
 import localforage from "localforage";
 import { fetchToken } from "./glyph";
-import { contractsUrl, restApiUrl, useIndexerApi } from "./signals";
+import { restApiUrl, useIndexerApi } from "./signals";
 import { ContractGroup, Token } from "./types";
 import { arrayChunks, deriveSubContractRefCandidates } from "./utils";
 import { fetchRef } from "./client";
@@ -46,14 +46,17 @@ const LIVE_COUNT_CONCURRENCY = 4;
 // Cache for API availability check
 let apiAvailable: boolean | null = null;
 let apiCheckTime = 0;
-const API_CHECK_INTERVAL = 60000; // Re-check every 60 seconds
+const API_CHECK_INTERVAL_SUCCESS = 60000; // Re-check every 60 seconds when successful
+const API_CHECK_INTERVAL_FAILURE = 300000; // Re-check every 5 minutes when failed
 
 /**
  * Check if RXinDexer dMint API is available (with caching).
  */
 async function checkApiAvailable(): Promise<boolean> {
   const now = Date.now();
-  if (apiAvailable !== null && now - apiCheckTime < API_CHECK_INTERVAL) {
+  const interval = apiAvailable === true ? API_CHECK_INTERVAL_SUCCESS : API_CHECK_INTERVAL_FAILURE;
+  
+  if (apiAvailable !== null && now - apiCheckTime < interval) {
     return apiAvailable;
   }
   
@@ -71,31 +74,10 @@ async function checkApiAvailable(): Promise<boolean> {
 
 /**
  * Fetch contracts from RXinDexer API or fallback to static URL.
- * Tries API first if useIndexerApi is enabled, falls back to static URL.
+ * Uses the improved fetchContractsSimple with comprehensive fallback chain.
  */
 async function fetchCuratedContracts(): Promise<[string, number][]> {
-  // Try RXinDexer API first if enabled
-  if (useIndexerApi.value) {
-    const isAvailable = await checkApiAvailable();
-    
-    if (isAvailable) {
-      const contracts = await fetchContractsSimple();
-      if (contracts.length > 0) {
-        return contracts;
-      }
-    }
-  }
-  
-  // Fallback to static URL
-  try {
-    const response = await fetch(contractsUrl.value);
-    if (!response.ok) {
-      return [];
-    }
-    return (await response.json()) as [string, number][];
-  } catch {
-    return [];
-  }
+  return await fetchContractsSimple();
 }
 
 /**
