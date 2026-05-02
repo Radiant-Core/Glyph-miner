@@ -7,7 +7,7 @@
  */
 
 import { client } from "./client";
-import { restApiUrl } from "./signals";
+import { restApiUrl, contractsUrl } from "./signals";
 
 let getContractSupported: boolean | null = null;
 let getContractsSupported: boolean | null = null;
@@ -249,9 +249,11 @@ async function fetchFromRestApi(endpoint: string): Promise<RestDmintContract[] |
   }
 
   try {
-    const response = await fetch(`${url}${endpoint}`);
+    const response = await fetch(`${url}${endpoint}`, {
+      signal: AbortSignal.timeout(10000), // 10 second timeout
+    });
     if (!response.ok) {
-      console.warn(`REST API request failed: ${response.status} ${response.statusText}`);
+      console.warn(`REST API request failed: ${response.status} ${response.statusText} for ${url}${endpoint}`);
       return null;
     }
 
@@ -262,7 +264,11 @@ async function fetchFromRestApi(endpoint: string): Promise<RestDmintContract[] |
     }
     return data.results || data.contracts || [];
   } catch (error) {
-    console.warn("Failed to fetch from REST API:", error);
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      console.warn(`REST API timeout for ${url}${endpoint}`);
+    } else {
+      console.warn(`Failed to fetch from REST API at ${url}${endpoint}:`, error);
+    }
     return null;
   }
 }
@@ -304,12 +310,13 @@ function mapRestContract(rest: RestDmintContract): ExtendedContract {
 
 /**
  * Fetch contracts in simple tuple format: [[ref, outputs], ...]
- * Uses REST API (primary) with Electrum RPC fallback.
+ * Uses REST API (primary) with Electrum RPC fallback, then static fallback.
  */
 export async function fetchContractsSimple(): Promise<[string, number][]> {
   // Try REST API first
   const restContracts = await fetchFromRestApi("/dmint/contracts?version=2&limit=5000");
   if (restContracts && restContracts.length > 0) {
+    console.log(`Loaded ${restContracts.length} contracts from REST API`);
     return restContracts.map((c) => [c.token_ref, c.contracts?.total ?? 0]);
   }
 
@@ -326,17 +333,53 @@ export async function fetchContractsSimple(): Promise<[string, number][]> {
     // Handle error response
     if (result && typeof result === 'object' && 'error' in result) {
       console.warn("dMint API error:", (result as { error: string }).error);
+    } else {
+      const response = toExtendedResponse(result);
+      if (response?.contracts?.length) {
+        console.log(`Loaded ${response.contracts.length} contracts from Electrum API`);
+        return response.contracts.map((c) => [c.ref, c.outputs]);
+      }
+    }
+  } catch (error) {
+    console.warn("Failed to fetch contracts from Electrum API:", error);
+  }
+
+  // Final fallback to static contracts URL
+  try {
+    const staticUrl = contractsUrl.value;
+    if (!staticUrl) {
+      console.warn("Static contracts URL not configured");
       return [];
     }
     
-    const response = toExtendedResponse(result);
-    if (!response?.contracts?.length) {
+    const response = await fetch(staticUrl, {
+      signal: AbortSignal.timeout(10000),
+      headers: {
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache'
+      }
+    });
+    
+    if (!response.ok) {
+      console.warn(`Static contracts URL failed: ${response.status} ${response.statusText}`);
       return [];
     }
-
-    return response.contracts.map((c) => [c.ref, c.outputs]);
+    
+    const contentType = response.headers.get('content-type');
+    if (!contentType?.includes('application/json')) {
+      console.warn(`Static contracts URL returned non-JSON content: ${contentType}`);
+      return [];
+    }
+    
+    const contracts = await response.json() as [string, number][];
+    console.log(`Loaded ${contracts.length} contracts from static URL`);
+    return contracts;
   } catch (error) {
-    console.warn("Failed to fetch contracts from API:", error);
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      console.warn("Static contracts URL timeout");
+    } else {
+      console.error("All contract loading methods failed:", error);
+    }
     return [];
   }
 }

@@ -104,16 +104,24 @@ async function fetchCuratedContracts(): Promise<[string, number][]> {
  */
 export async function fetchExtendedContracts(): Promise<ExtendedContract[] | null> {
   if (!useIndexerApi.value) {
+    console.log("Indexer API disabled in settings");
     return null;
   }
   
   const isAvailable = await checkApiAvailable();
   if (!isAvailable) {
+    console.log("Indexer API not available");
     return null;
   }
   
   const response = await fetchContractsExtended();
-  return response?.contracts || null;
+  if (response?.contracts?.length) {
+    console.log(`Loaded ${response.contracts.length} extended contracts from API`);
+    return response.contracts;
+  }
+  
+  console.log("No extended contracts available from API");
+  return null;
 }
 
 /**

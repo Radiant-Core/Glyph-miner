@@ -31,7 +31,7 @@ mintMessage.value = localStorage.getItem("mintMessage") || "";
 hideMessages.value = localStorage.getItem("hideMessages") === "1";
 contractsUrl.value =
   localStorage.getItem("contractsUrl") ||
-  "https://glyph-miner.com/contracts.json";
+  "/contracts.json";
 // Default to using RXinDexer API (true unless explicitly disabled)
 useIndexerApi.value = localStorage.getItem("useIndexerApi") !== "";
 // Load RXinDexer REST API URL
