@@ -247,9 +247,28 @@ async function fetchFromRestApi(endpoint: string): Promise<RestDmintContract[] |
     }
 
     const data: any = await response.json();
-    // v2 format uses 'items', v1 format uses 'contracts' or 'results'
+    // v2 format uses 'items' (DmintV2TokenSummaryItem[]) — map to flat RestDmintContract shape
     if (Array.isArray(data.items)) {
-      return data.items;
+      return (data.items as DmintV2TokenSummaryItem[]).map((item) => ({
+        ref: item.token_ref,
+        ticker: item.ticker,
+        name: item.name,
+        algorithm: item.algorithm?.id ?? 0,
+        difficulty: item.target ? Number(item.target) : 0,
+        reward: item.reward_per_mint ? Number(item.reward_per_mint) : 0,
+        percent_mined: item.percent_mined ?? 0,
+        active: item.active ?? !item.is_fully_mined,
+        burned: item.burned,
+        deploy_height: item.deploy_height ?? 0,
+        daa_mode: item.daa_mode?.id ?? 0,
+        daa_mode_name: item.daa_mode?.name,
+        outputs: item.contracts?.total ?? 0,
+        total_supply: item.supply?.total ? Number(item.supply.total) : 0,
+        mined_supply: item.supply?.minted ? Number(item.supply.minted) : 0,
+        icon_type: item.icon?.type ?? null,
+        icon_data: item.icon?.data_hex ?? null,
+        icon_url: item.icon?.url ?? null,
+      } as RestDmintContract));
     }
     return data.results || data.contracts || [];
   } catch (error) {
@@ -580,29 +599,13 @@ export async function fetchMostProfitable(limit: number = 10): Promise<ExtendedC
  * Returns true if the API is available.
  */
 export async function isDmintApiAvailable(): Promise<boolean> {
+  const url = restApiUrl.value;
+  if (!url) return false;
   try {
-    const request: DmintV2ContractsRequest = {
-      version: 2,
-      view: "token_summary",
-      filters: { status: "mineable" },
-      pagination: { limit: 1 },
-    };
-
-    // Try a minimal v2 request - if it returns data or a proper error, API is available
-    const result = await Promise.race([
-      client.request("dmint.get_contracts", request as unknown as string),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000))
-    ]);
-    
-    // If we get an "unknown method" type error, API is not available
-    if (result && typeof result === 'object' && 'error' in result) {
-      const error = (result as { error: string }).error.toLowerCase();
-      if (error.includes("unknown") || error.includes("not found") || error.includes("not supported")) {
-        return false;
-      }
-    }
-    
-    return true;
+    const response = await fetch(`${url}/dmint/stats`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    return response.ok;
   } catch {
     return false;
   }
