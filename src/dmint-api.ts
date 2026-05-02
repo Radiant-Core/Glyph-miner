@@ -208,34 +208,23 @@ export const DMINT_ALGORITHM = {
 
 // REST API response types
 interface RestDmintContract {
-  token_ref: string;
+  ref: string;
   ticker?: string;
   name?: string;
-  algorithm: { id: number; name?: string };
-  daa_mode?: { id: number; name?: string };
-  contracts?: {
-    total?: number;
-    mineable_remaining?: number | null;
-    fully_mined?: number | null;
-  };
-  supply?: {
-    total?: string;
-    minted?: string;
-    remaining?: string;
-    unit?: string;
-  };
-  reward_per_mint?: string;
-  target?: string;
+  algorithm: number;
+  difficulty?: number;
+  reward?: number;
   percent_mined?: number;
-  deploy_height?: number;
   active?: boolean;
-  is_fully_mined?: boolean;
-  burned?: boolean;
-  icon?: {
-    type?: string | null;
-    url?: string | null;
-    data_hex?: string | null;
-  };
+  deploy_height?: number;
+  daa_mode?: number;
+  daa_mode_name?: string;
+  outputs?: number;
+  total_supply?: number;
+  mined_supply?: number;
+  icon_type?: string | null;
+  icon_data?: string | null;
+  icon_url?: string | null;
 }
 
 /**
@@ -277,8 +266,8 @@ async function fetchFromRestApi(endpoint: string): Promise<RestDmintContract[] |
  * Map REST API contract to ExtendedContract format
  */
 function mapRestContract(rest: RestDmintContract): ExtendedContract {
-  const totalSupply = parseIntString(rest.supply?.total);
-  const minedSupply = parseIntString(rest.supply?.minted);
+  const totalSupply = rest.total_supply || 0;
+  const minedSupply = rest.mined_supply || 0;
   const percentMined =
     typeof rest.percent_mined === "number"
       ? rest.percent_mined
@@ -287,22 +276,22 @@ function mapRestContract(rest: RestDmintContract): ExtendedContract {
         : 0;
 
   return {
-    ref: rest.token_ref,
-    outputs: rest.contracts?.total ?? 0,
+    ref: rest.ref,
+    outputs: rest.outputs ?? 0,
     ticker: rest.ticker,
     name: rest.name,
-    algorithm: rest.algorithm?.id ?? 0,
-    difficulty: parseIntString(rest.target),
-    reward: parseIntString(rest.reward_per_mint),
+    algorithm: rest.algorithm ?? 0,
+    difficulty: rest.difficulty ?? 0,
+    reward: rest.reward ?? 0,
     percent_mined: percentMined,
-    active: rest.active ?? !rest.is_fully_mined,
-    burned: rest.burned,
+    active: rest.active ?? true,
+    burned: false,
     deploy_height: rest.deploy_height ?? 0,
-    daa_mode: rest.daa_mode?.id ?? 0,
-    daa_mode_name: rest.daa_mode?.name,
-    icon_type: rest.icon?.type ?? undefined,
-    icon_data: rest.icon?.data_hex ?? undefined,
-    icon_url: rest.icon?.url ?? undefined,
+    daa_mode: rest.daa_mode ?? 0,
+    daa_mode_name: rest.daa_mode_name,
+    icon_type: rest.icon_type || undefined,
+    icon_data: rest.icon_data || undefined,
+    icon_url: rest.icon_url || undefined,
     total_supply: totalSupply,
     mined_supply: minedSupply,
   };
@@ -317,7 +306,7 @@ export async function fetchContractsSimple(): Promise<[string, number][]> {
   const restContracts = await fetchFromRestApi("/dmint/contracts?version=2&limit=5000");
   if (restContracts && restContracts.length > 0) {
     console.log(`Loaded ${restContracts.length} contracts from REST API`);
-    return restContracts.map((c) => [c.token_ref, c.contracts?.total ?? 0]);
+    return restContracts.map((c) => [c.ref, c.outputs ?? 0]);
   }
 
   // Fallback to Electrum RPC
@@ -347,6 +336,7 @@ export async function fetchContractsSimple(): Promise<[string, number][]> {
   // Final fallback to static contracts URL
   try {
     const staticUrl = contractsUrl.value;
+    console.log("Attempting static fallback with URL:", staticUrl);
     if (!staticUrl) {
       console.warn("Static contracts URL not configured");
       return [];
@@ -360,19 +350,22 @@ export async function fetchContractsSimple(): Promise<[string, number][]> {
       }
     });
     
+    console.log("Static fallback response status:", response.status, response.statusText);
+    
     if (!response.ok) {
       console.warn(`Static contracts URL failed: ${response.status} ${response.statusText}`);
       return [];
     }
     
     const contentType = response.headers.get('content-type');
+    console.log("Static fallback content-type:", contentType);
     if (!contentType?.includes('application/json')) {
       console.warn(`Static contracts URL returned non-JSON content: ${contentType}`);
       return [];
     }
     
     const contracts = await response.json() as [string, number][];
-    console.log(`Loaded ${contracts.length} contracts from static URL`);
+    console.log(`Loaded ${contracts.length} contracts from static URL:`, contracts);
     return contracts;
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {

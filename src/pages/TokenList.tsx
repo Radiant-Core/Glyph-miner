@@ -203,12 +203,12 @@ function SortTh({ label, field, cur, dir, onSort, isNumeric = false }: {
 }
 
 function sortVal(item: ContractSummaryItem, f: SortField): number | string {
-  if (f === "ticker") return item.ticker.toLowerCase();
-  if (f === "algorithm") return getAlgorithmName(item.algorithm).toLowerCase();
-  if (f === "claimed") return item.percentMined;
+  if (f === "ticker") return (item.ticker || "").toLowerCase();
+  if (f === "algorithm") return getAlgorithmName(item.algorithm || 0).toLowerCase();
+  if (f === "claimed") return item.percentMined || 0;
   if (f === "contracts") return item.contractCount ?? -1;
-  if (f === "reward") return item.reward;
-  return item.reward;
+  if (f === "reward") return item.reward || 0;
+  return item.reward || 0;
 }
 
 export default function TokenList() {
@@ -254,10 +254,10 @@ export default function TokenList() {
     const q = search.toLowerCase().trim();
     let list = q
       ? items.filter(i =>
-          i.ticker.toLowerCase().includes(q) ||
-          i.name.toLowerCase().includes(q) ||
-          getAlgorithmName(i.algorithm).toLowerCase().includes(q) ||
-          i.ref.includes(q))
+          (i.ticker || "").toLowerCase().includes(q) ||
+          (i.name || "").toLowerCase().includes(q) ||
+          getAlgorithmName(i.algorithm || 0).toLowerCase().includes(q) ||
+          (i.ref || "").includes(q))
       : [...items];
 
     if (algorithm !== "all") {
