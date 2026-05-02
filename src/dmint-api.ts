@@ -15,7 +15,8 @@ let warnedGetContractUnsupported = false;
 let warnedGetContractsUnsupported = false;
 const extendedContractsCache = new Map<string, ExtendedContract>();
 
-function normalizeRef(ref: string): string {
+function normalizeRef(ref: string | undefined | null): string {
+  if (!ref) return "";
   const normalized = ref.toLowerCase().replace(/[^0-9a-f]/g, "");
   if (normalized.length <= 64) {
     return normalized;
@@ -38,11 +39,13 @@ function isUnsupportedMethodError(message: string): boolean {
 function indexExtendedContracts(contracts: ExtendedContract[]): void {
   extendedContractsCache.clear();
   for (const c of contracts) {
+    if (!c.ref) continue;
     extendedContractsCache.set(normalizeRef(c.ref), c);
   }
 }
 
 function getFromExtendedCache(ref: string): ExtendedContract | null {
+  if (!ref) return null;
   return extendedContractsCache.get(normalizeRef(ref)) ?? null;
 }
 
@@ -249,7 +252,7 @@ async function fetchFromRestApi(endpoint: string): Promise<RestDmintContract[] |
     const data: any = await response.json();
     // v2 format uses 'items' (DmintV2TokenSummaryItem[]) — map to flat RestDmintContract shape
     if (Array.isArray(data.items)) {
-      return (data.items as DmintV2TokenSummaryItem[]).map((item) => ({
+      return (data.items as DmintV2TokenSummaryItem[]).filter((item) => !!item.token_ref).map((item) => ({
         ref: item.token_ref,
         ticker: item.ticker,
         name: item.name,
