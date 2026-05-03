@@ -7,6 +7,7 @@ import { Transaction } from "@radiantblockchain/radiantjs";
 import localforage from "localforage";
 import { addMessage } from "./message";
 import { resetApiCache } from "./deployments";
+import { resetDmintApiState } from "./dmint-api";
 
 export enum ServerStatus {
   DISCONNECTED,
@@ -131,6 +132,7 @@ export async function connect(newServerList = false) {
 
   // Reset API cache when connecting to a new server
   resetApiCache();
+  resetDmintApiState();
 
   await miner.stop();
 

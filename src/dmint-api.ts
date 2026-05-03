@@ -15,6 +15,17 @@ let warnedGetContractUnsupported = false;
 let warnedGetContractsUnsupported = false;
 const extendedContractsCache = new Map<string, ExtendedContract>();
 
+/**
+ * Reset cached API support flags. Call when switching servers.
+ */
+export function resetDmintApiState(): void {
+  getContractSupported = null;
+  getContractsSupported = null;
+  warnedGetContractUnsupported = false;
+  warnedGetContractsUnsupported = false;
+  extendedContractsCache.clear();
+}
+
 function normalizeRef(ref: string | undefined | null): string {
   if (!ref) return "";
   const normalized = ref.toLowerCase().replace(/[^0-9a-f]/g, "");
@@ -242,7 +253,7 @@ async function fetchFromRestApi(endpoint: string): Promise<RestDmintContract[] |
 
   try {
     const response = await fetch(`${url}${endpoint}`, {
-      signal: AbortSignal.timeout(10000), // 10 second timeout
+      signal: AbortSignal.timeout(30000), // 30 second timeout
     });
     if (!response.ok) {
       console.warn(`REST API request failed: ${response.status} ${response.statusText} for ${url}${endpoint}`);
@@ -406,7 +417,7 @@ export async function fetchContractsSimple(): Promise<[string, number][]> {
  */
 export async function fetchContractsExtended(): Promise<ExtendedContractsResponse | null> {
   // Try REST API first
-  const restContracts = await fetchFromRestApi("/dmint/contracts?version=2&limit=5000");
+  const restContracts = await fetchFromRestApi("/dmint/contracts?version=2&limit=5000&include_icon_data=true");
   if (restContracts && restContracts.length > 0) {
     const mapped = restContracts.map(mapRestContract);
     indexExtendedContracts(mapped);

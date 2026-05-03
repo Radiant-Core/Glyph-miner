@@ -1,7 +1,7 @@
 import { swapEndianness } from "@bitauth/libauth";
 import localforage from "localforage";
 import { fetchToken } from "./glyph";
-import { restApiUrl, useIndexerApi } from "./signals";
+import { useIndexerApi } from "./signals";
 import { ContractGroup, Token } from "./types";
 import { arrayChunks, deriveSubContractRefCandidates } from "./utils";
 import { fetchRef } from "./client";
@@ -285,27 +285,16 @@ export async function getCachedTokenContracts(firstRef: string) {
  * Falls back to Electrum RPC extended format, then to null.
  */
 export async function fetchContractSummaries(): Promise<ContractSummaryItem[]> {
-  // Try REST API directly first (no Electrum dependency).
-  if (useIndexerApi.value && restApiUrl.value) {
-    const response = await fetchContractsExtended();
-    if (response?.contracts?.length) {
-      const mineableContracts = response.contracts.filter(isContractMineable);
-      console.log(`Loaded ${mineableContracts.length} mineable contracts from REST API`);
-      return mineableContracts.map(mapExtendedToSummary);
-    }
+  if (!useIndexerApi.value) {
+    return [];
   }
 
-  // Fallback: Electrum RPC when REST is unavailable
-  if (useIndexerApi.value) {
-    const isAvailable = await checkApiAvailable();
-    if (isAvailable) {
-      const response = await fetchContractsExtended();
-      if (response?.contracts?.length) {
-        const mineableContracts = response.contracts.filter(isContractMineable);
-        console.log(`Loaded ${mineableContracts.length} mineable contracts from Electrum API`);
-        return mineableContracts.map(mapExtendedToSummary);
-      }
-    }
+  // fetchContractsExtended already handles REST→Electrum fallback internally
+  const response = await fetchContractsExtended();
+  if (response?.contracts?.length) {
+    const mineableContracts = response.contracts.filter(isContractMineable);
+    console.log(`Loaded ${mineableContracts.length} mineable contracts`);
+    return mineableContracts.map(mapExtendedToSummary);
   }
 
   return [];
