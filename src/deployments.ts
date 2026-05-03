@@ -429,6 +429,8 @@ export async function enrichContractSummariesWithVerifiedCounts(
 }
 
 function isContractMineable(c: ExtendedContract): boolean {
+  // Exclude contracts with missing ref (prevents downstream TypeError)
+  if (!c.ref) return false;
   // Exclude fully mined (>=100%) or nearly mined (>99%)
   if (c.percent_mined >= 99) return false;
   // Exclude burned contracts

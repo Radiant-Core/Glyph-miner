@@ -26,6 +26,7 @@ export function cat(a: Uint8Array, b: Uint8Array) {
 }
 
 export function reverseRef(hex: string) {
+  if (!hex) return "";
   const ref = swapEndianness(hex.toLowerCase());
   return `${ref.substring(8)}${ref.substring(0, 8)}`;
 }
@@ -127,6 +128,7 @@ export function deriveSubContractRefCandidates(
  * Normalize a compact ref (variable-length vout) to full 72-char format.
  */
 export function normalizeRef(ref: string): string {
+  if (!ref) return "";
   const normalized = ref.toLowerCase().replace(/[^0-9a-f]/g, "");
   const txid = normalized.substring(0, 64);
   const vout = parseInt(normalized.substring(64), 16);

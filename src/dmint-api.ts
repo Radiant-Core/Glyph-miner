@@ -273,7 +273,8 @@ async function fetchFromRestApi(endpoint: string): Promise<RestDmintContract[] |
         icon_url: item.icon?.url ?? null,
       } as RestDmintContract));
     }
-    return data.results || data.contracts || [];
+    const raw: RestDmintContract[] = data.results || data.contracts || [];
+    return raw.filter((c: RestDmintContract) => !!c.ref);
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       console.warn(`REST API timeout for ${url}${endpoint}`);
