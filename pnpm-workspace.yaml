@@ -4,5 +4,6 @@ allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
   - '@radiant-core/radiantjs@2.0.0'
+  - '@radiant-core/radiantjs@2.0.1'
 patchedDependencies:
   ws-electrumx-client@1.0.5: patches/ws-electrumx-client@1.0.5.patch

@@ -48,8 +48,8 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0(@babel/core@7.29.0)(react@18.3.1)
       '@radiant-core/radiantjs':
-        specifier: ^2.0.0
-        version: 2.0.0
+        specifier: ^2.0.1
+        version: 2.0.1
       '@scure/bip32':
         specifier: ^1.5.0
         version: 1.7.0
@@ -667,8 +667,8 @@ packages:
     peerDependencies:
       react: ^16.14.0 || 17.x || 18.x || 19.x
 
-  '@radiant-core/radiantjs@2.0.0':
-    resolution: {integrity: sha512-pRhu1oIPIYt5w4byhE6f0mIn8jUyUullPR0GIjMQ3JFefq6J/F5ACjvYarpfgnaQdQCp7kv2HKIRAGVsqXblnA==}
+  '@radiant-core/radiantjs@2.0.1':
+    resolution: {integrity: sha512-vhw+rRZccins/sHdT3yqDATP8c7dxivoEFugO8AnfQ+Tmo2yzWzpe+DMTPHWfj5P/+pVCaDPCHWud4j83sZUFQ==}
 
   '@remix-run/router@1.23.2':
     resolution: {integrity: sha512-Ic6m2U/rMjTkhERIa/0ZtXJP17QUi2CbWE7cqx4J58M8aA3QTfW+2UlQ4psvTX9IO1RfNVhK3pcpdjej7L+t2w==}
@@ -3020,7 +3020,7 @@ snapshots:
       react: 18.3.1
       use-sync-external-store: 1.6.0(react@18.3.1)
 
-  '@radiant-core/radiantjs@2.0.0':
+  '@radiant-core/radiantjs@2.0.1':
     dependencies:
       aes-js: 3.1.2
       bn.js: 4.12.3
