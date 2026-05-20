@@ -351,6 +351,104 @@ export function computeLinearTarget(
   return newTarget;
 }
 
+/**
+ * Translate a user-facing maxAdjustment factor (2, 4, 8, 16) to the log2 shift
+ * count the on-chain EPOCH bytecode embeds. Mirrors Photonic-Wallet
+ * packages/lib/src/script.ts maxAdjustmentToLog2() exactly.
+ */
+function epochMaxAdjustmentToLog2(value: number | undefined): bigint {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 2n; // default 4x
+  if (value === 1 || value === 2 || value === 3 || value === 4) return BigInt(value); // already log2
+  const factorToLog2: Record<number, bigint> = { 2: 1n, 4: 2n, 8: 3n, 16: 4n };
+  if (value in factorToLog2) return factorToLog2[value];
+  // Out-of-range value: fall back to default rather than throw mid-mine.
+  return 2n;
+}
+
+/**
+ * Compute the EPOCH-mode next target. Mirrors the on-chain bytecode from
+ * Photonic-Wallet buildEpochDaaBytecode() so miner predictions match what
+ * the contract spend will compute.
+ *
+ *   if (height > 0) and (height % epochLength == 0):
+ *     delta        = currentTime - lastTime
+ *     clampedDelta = max(targetTime >> N, min(targetTime << N, delta))
+ *     newTarget    = max(1, oldTarget * clampedDelta / targetTime)
+ *   else:
+ *     target unchanged
+ */
+export function computeEpochTarget(
+  oldTarget: bigint,
+  height: bigint,
+  lastTime: bigint,
+  currentTime: bigint,
+  targetTime: bigint,
+  epochLength: bigint,
+  maxAdjustmentLog2: bigint,
+): bigint {
+  if (height <= 0n) return oldTarget;
+  if (epochLength <= 0n) return oldTarget;
+  if (height % epochLength !== 0n) return oldTarget;
+
+  const n = maxAdjustmentLog2;
+  const delta = currentTime - lastTime;
+  const upperBound = targetTime << n;
+  const lowerBound = targetTime >> n;
+
+  let clampedDelta = delta;
+  if (clampedDelta > upperBound) clampedDelta = upperBound;
+  if (clampedDelta < lowerBound) clampedDelta = lowerBound;
+
+  let newTarget = (oldTarget * clampedDelta) / targetTime;
+  if (newTarget < 1n) newTarget = 1n;
+  return newTarget;
+}
+
+/**
+ * Compute the SCHEDULE-mode next target. Mirrors the on-chain bytecode from
+ * Photonic-Wallet buildScheduleDaaBytecode() — walk schedule descending by
+ * height, return the first entry whose height ≤ current height; otherwise
+ * preserve the old target.
+ *
+ * Accepts entries with either `target` (bigint, preferred) or `difficulty`
+ * (number, converted via dMintDiffToTarget semantics) so that miner code
+ * stays robust against either CBOR form.
+ */
+export function computeScheduleTarget(
+  oldTarget: bigint,
+  height: bigint,
+  schedule: Array<{ height: number | bigint; target?: bigint | number; difficulty?: number }>,
+  maxTarget: bigint = 0x7fffffffffffffffn, // same as Photonic-Wallet MAX_TARGET
+): bigint {
+  if (!Array.isArray(schedule) || schedule.length === 0) return oldTarget;
+
+  // Build a sorted-descending list of {height, target}
+  const normalized: Array<{ height: bigint; target: bigint }> = schedule
+    .map((e) => {
+      const h = typeof e.height === 'bigint' ? e.height : BigInt(e.height);
+      let t: bigint;
+      if (typeof e.target === 'bigint') {
+        t = e.target;
+      } else if (typeof e.target === 'number' && Number.isFinite(e.target)) {
+        t = BigInt(e.target);
+      } else if (typeof e.difficulty === 'number' && Number.isFinite(e.difficulty) && e.difficulty > 0) {
+        t = maxTarget / BigInt(e.difficulty);
+      } else {
+        // Skip entries we can't interpret; the miner should never see these in
+        // practice because the wallet validates at build time.
+        return null;
+      }
+      return { height: h, target: t };
+    })
+    .filter((x): x is { height: bigint; target: bigint } => x !== null)
+    .sort((a, b) => (a.height > b.height ? -1 : a.height < b.height ? 1 : 0));
+
+  for (const entry of normalized) {
+    if (height >= entry.height) return entry.target;
+  }
+  return oldTarget;
+}
+
 export function isV2Contract(contract: Contract): boolean {
   return contract.algoId !== undefined && contract.daaMode !== undefined;
 }
@@ -367,7 +465,10 @@ export function buildNextContractState(
     const lastTime = contract.lastTime ?? currentTime;
     const targetTime = contract.targetTime ?? 60n;
 
-    // Compute DAA-adjusted target
+    // Compute DAA-adjusted target. Each branch must mirror the on-chain
+    // bytecode (Photonic-Wallet buildXxxDaaBytecode) exactly, otherwise the
+    // predicted next state won't match what the contract spend computes and
+    // the broadcast will be rejected as invalid.
     let newTarget = oldTarget;
     if (contract.daaMode === 'asert') {
       // halfLife is embedded in bytecode, not state — use daaParams or default
@@ -375,6 +476,26 @@ export function buildNextContractState(
       newTarget = computeAsertTarget(oldTarget, lastTime, currentTime, targetTime, halfLife);
     } else if (contract.daaMode === 'lwma') {
       newTarget = computeLinearTarget(oldTarget, lastTime, currentTime, targetTime);
+    } else if (contract.daaMode === 'epoch') {
+      const epochLength = BigInt(contract.daaParams?.epochLength || 2016);
+      const maxAdjustmentLog2 = epochMaxAdjustmentToLog2(
+        contract.daaParams?.maxAdjustmentLog2 ?? contract.daaParams?.maxAdjustment
+      );
+      newTarget = computeEpochTarget(
+        oldTarget,
+        newHeight,
+        lastTime,
+        currentTime,
+        targetTime,
+        epochLength,
+        maxAdjustmentLog2,
+      );
+    } else if (contract.daaMode === 'schedule') {
+      newTarget = computeScheduleTarget(
+        oldTarget,
+        newHeight,
+        contract.daaParams?.schedule ?? [],
+      );
     }
     // fixed mode: newTarget = oldTarget (no change)
 

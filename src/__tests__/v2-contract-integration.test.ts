@@ -21,6 +21,8 @@ import {
   findNonMinimalDataPush,
   computeAsertTarget,
   computeLinearTarget,
+  computeEpochTarget,
+  computeScheduleTarget,
   nonceBytesForAlgorithm,
   mapHashOpToAlgorithm,
   unlockingOutputIndexOpcodeHex,
@@ -1002,5 +1004,123 @@ describe('V2 Contract Integration: Edge Cases', () => {
     expect((result!.params as Contract).maxHeight).toBe(2100000000n);
     expect((result!.params as Contract).reward).toBe(5000000000n);
     expect(findNonMinimalDataPush(fullScript)).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// EPOCH and SCHEDULE: miner-side compute functions must mirror the on-chain
+// bytecode (Photonic-Wallet buildEpochDaaBytecode / buildScheduleDaaBytecode)
+// exactly. If these drift the miner will predict the wrong next target and
+// the broadcast will be rejected.
+// ---------------------------------------------------------------------------
+
+describe('computeEpochTarget — mirrors on-chain EPOCH bytecode', () => {
+  const oldTarget = 1_000_000n;
+  const targetTime = 60n;
+  const lastTime = 1_700_000_000n;
+
+  it('preserves target between epoch boundaries', () => {
+    // height=5, epochLength=10 — not at boundary
+    const next = computeEpochTarget(oldTarget, 5n, lastTime, lastTime + 60n, targetTime, 10n, 2n);
+    expect(next).toBe(oldTarget);
+  });
+
+  it('preserves target at height=0 (skips initial boundary)', () => {
+    // 0 % anything == 0 would trigger naively, but bytecode guards with height>0
+    const next = computeEpochTarget(oldTarget, 0n, lastTime, lastTime + 60n, targetTime, 10n, 2n);
+    expect(next).toBe(oldTarget);
+  });
+
+  it('adjusts target at epoch boundary (delta = targetTime → no change)', () => {
+    // height=10, epochLength=10, delta == targetTime → factor 1
+    const next = computeEpochTarget(oldTarget, 10n, lastTime, lastTime + 60n, targetTime, 10n, 2n);
+    expect(next).toBe(oldTarget);
+  });
+
+  it('adjusts target at boundary (delta = 2 × targetTime → 2x easier, clamped at 4x)', () => {
+    // delta=120, targetTime=60, factor=2 → newTarget = 2 * oldTarget
+    const next = computeEpochTarget(oldTarget, 10n, lastTime, lastTime + 120n, targetTime, 10n, 2n);
+    expect(next).toBe(oldTarget * 2n);
+  });
+
+  it('clamps delta to upper bound (delta > targetTime << N)', () => {
+    // delta=600, targetTime=60, N=2 → upperBound = 60<<2 = 240
+    // clampedDelta = 240, newTarget = oldTarget * 240 / 60 = oldTarget * 4
+    const next = computeEpochTarget(oldTarget, 10n, lastTime, lastTime + 600n, targetTime, 10n, 2n);
+    expect(next).toBe(oldTarget * 4n);
+  });
+
+  it('clamps delta to lower bound (delta < targetTime >> N)', () => {
+    // delta=5, targetTime=60, N=2 → lowerBound = 60>>2 = 15
+    // clampedDelta = 15, newTarget = oldTarget * 15 / 60 = oldTarget / 4
+    const next = computeEpochTarget(oldTarget, 10n, lastTime, lastTime + 5n, targetTime, 10n, 2n);
+    expect(next).toBe(oldTarget / 4n);
+  });
+
+  it('floors target at 1', () => {
+    // Tiny old target, delta forces it below 1
+    const next = computeEpochTarget(2n, 10n, lastTime, lastTime + 5n, 60n, 10n, 2n);
+    // newTarget = 2 * 15 / 60 = 0 → clamped to 1
+    expect(next).toBe(1n);
+  });
+
+  it('different maxAdjustmentLog2 values give different clamp bounds', () => {
+    // N=1 → upperBound = 60<<1 = 120; N=4 → upperBound = 60<<4 = 960
+    const slowMint = lastTime + 10_000n; // very long delta
+    const aggressive = computeEpochTarget(oldTarget, 10n, lastTime, slowMint, 60n, 10n, 4n);
+    const gentle = computeEpochTarget(oldTarget, 10n, lastTime, slowMint, 60n, 10n, 1n);
+    expect(aggressive).toBeGreaterThan(gentle);
+  });
+});
+
+describe('computeScheduleTarget — mirrors on-chain SCHEDULE bytecode', () => {
+  const oldTarget = 1_000_000n;
+  const schedule = [
+    { height: 1000, target: 500_000n },
+    { height: 2000, target: 250_000n },
+    { height: 5000, target: 100_000n },
+  ];
+
+  it('preserves target below the first boundary', () => {
+    expect(computeScheduleTarget(oldTarget, 500n, schedule)).toBe(oldTarget);
+    expect(computeScheduleTarget(oldTarget, 999n, schedule)).toBe(oldTarget);
+  });
+
+  it('matches first boundary exactly', () => {
+    expect(computeScheduleTarget(oldTarget, 1000n, schedule)).toBe(500_000n);
+  });
+
+  it('uses the largest boundary at or below height', () => {
+    expect(computeScheduleTarget(oldTarget, 1500n, schedule)).toBe(500_000n);
+    expect(computeScheduleTarget(oldTarget, 2000n, schedule)).toBe(250_000n);
+    expect(computeScheduleTarget(oldTarget, 3000n, schedule)).toBe(250_000n);
+    expect(computeScheduleTarget(oldTarget, 5000n, schedule)).toBe(100_000n);
+    expect(computeScheduleTarget(oldTarget, 99_999n, schedule)).toBe(100_000n);
+  });
+
+  it('returns oldTarget for empty schedule', () => {
+    expect(computeScheduleTarget(oldTarget, 5000n, [])).toBe(oldTarget);
+  });
+
+  it('accepts difficulty-form entries (auto-converts to target)', () => {
+    // Wallet sometimes sends {height, difficulty} instead of {height, target}.
+    // MAX_TARGET / 100 = 0x0147ae147ae147ae (≈ 9.22 × 10^16)
+    const result = computeScheduleTarget(
+      oldTarget,
+      5000n,
+      [{ height: 1000, difficulty: 100 }],
+    );
+    const expected = 0x7fffffffffffffffn / 100n;
+    expect(result).toBe(expected);
+  });
+
+  it('handles a schedule passed in arbitrary order (sorts descending internally)', () => {
+    const shuffled = [
+      { height: 5000, target: 100_000n },
+      { height: 1000, target: 500_000n },
+      { height: 2000, target: 250_000n },
+    ];
+    expect(computeScheduleTarget(oldTarget, 3000n, shuffled)).toBe(250_000n);
+    expect(computeScheduleTarget(oldTarget, 999n, shuffled)).toBe(oldTarget);
   });
 });
