@@ -1,4 +1,4 @@
-import { PrivateKey } from "@radiantblockchain/radiantjs";
+import { PrivateKey } from "@radiant-core/radiantjs";
 
 /**
  * Glyph v2 Token Standard Types

@@ -1,4 +1,4 @@
-import { Transaction, Script } from "@radiantblockchain/radiantjs";
+import { Transaction, Script } from "@radiant-core/radiantjs";
 import { broadcast } from "./client";
 import { wallet, mineToAddress, utxos } from "./signals";
 import { FEE_PER_KB } from "./constants";

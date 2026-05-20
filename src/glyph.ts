@@ -1,6 +1,6 @@
 import { Buffer } from "buffer";
 import { decode } from "cbor-x";
-import { Script, Transaction } from "@radiantblockchain/radiantjs";
+import { Script, Transaction } from "@radiant-core/radiantjs";
 import type { Contract, Glyph } from "./types";
 import { isRef, opcodeToNum, push4bytes, pushMinimal, reverseRef } from "./utils";
 import { swapEndianness } from "@bitauth/libauth";

@@ -1,0 +1,6 @@
+allowBuilds:
+  '@swc/core': true
+  cbor-extract: true
+  esbuild: true
+minimumReleaseAgeExclude:
+  - '@radiant-core/radiantjs@2.0.0'

@@ -26,7 +26,7 @@
     "@noble/hashes": "^1.5.0",
     "@preact/signals-react": "^2.2.0",
     "@preact/signals-react-transform": "^0.4.0",
-    "@radiantblockchain/radiantjs": "github:Radiant-Core/radiantjs",
+    "@radiant-core/radiantjs": "^2.0.0",
     "@scure/bip32": "^1.5.0",
     "@scure/bip39": "^1.4.0",
     "assert": "^2.1.0",

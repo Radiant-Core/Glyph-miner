@@ -1,7 +1,7 @@
 import { base58AddressToLockingBytecode } from "@bitauth/libauth";
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
-import { Script, Transaction } from "@radiantblockchain/radiantjs";
+import { Script, Transaction } from "@radiant-core/radiantjs";
 import { burnScript, dMintScript, fetchToken, parseContractTx } from "./glyph";
 import {
   accepted,

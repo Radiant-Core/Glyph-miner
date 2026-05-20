@@ -3,7 +3,7 @@ import { ElectrumWS } from "ws-electrumx-client";
 import miner from "./miner";
 import { miningEnabled, servers } from "./signals";
 import { recoverFromError, subscribeToAddress } from "./blockchain";
-import { Transaction } from "@radiantblockchain/radiantjs";
+import { Transaction } from "@radiant-core/radiantjs";
 import localforage from "localforage";
 import { addMessage } from "./message";
 import { resetApiCache } from "./deployments";

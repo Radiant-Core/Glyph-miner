@@ -1,5 +1,5 @@
 import { Buffer } from "buffer";
-import { Networks, PrivateKey } from "@radiantblockchain/radiantjs";
+import { Networks, PrivateKey } from "@radiant-core/radiantjs";
 import { generateMnemonic, mnemonicToSeedSync } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
 import { HDKey } from "@scure/bip32";

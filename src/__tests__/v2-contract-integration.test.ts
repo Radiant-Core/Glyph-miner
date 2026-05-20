@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { Script } from '@radiantblockchain/radiantjs';
+import { Script } from '@radiant-core/radiantjs';
 import { parseDmintScript, parseContractTx } from '../glyph';
 import { push4bytes, pushMinimal, opcodeToNum } from '../utils';
 import {

@@ -55,7 +55,7 @@ Glyph-miner handles private keys for mining rewards. Security considerations:
 
 ## Dependencies
 
-- `@radiantblockchain/radiantjs` - Wallet operations
+- `@radiant-core/radiantjs` - Wallet operations
 - WebGPU shaders for mining algorithms
 
 ---

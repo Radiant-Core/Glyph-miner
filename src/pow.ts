@@ -3,7 +3,7 @@ import {
   swapEndianness,
 } from "@bitauth/libauth";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
-import { Script } from "@radiantblockchain/radiantjs";
+import { Script } from "@radiant-core/radiantjs";
 import { Contract, Work } from "./types";
 import { sha256 } from "@noble/hashes/sha256";
 import { cat } from "./utils";
