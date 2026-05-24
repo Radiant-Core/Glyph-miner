@@ -26,7 +26,6 @@ import {
   scriptHash,
   deriveSubContractRefCandidates,
   push4bytes,
-  pushMinimal,
 } from "./utils";
 import { broadcast, client, fetchRef, fetchTx } from "./client";
 import { Contract, Work, Utxo, AlgorithmId } from "./types";
@@ -299,7 +298,10 @@ type NextContractState = {
   lastTime?: bigint;
 };
 
-function daaModeToId(mode?: string): bigint {
+// Kept as an export for callers that may need it once the on-chain DAA
+// propagation work lands and `buildNextContractState` starts rewriting the
+// state-script fields again.
+export function daaModeToId(mode?: string): bigint {
   switch (mode) {
     case 'fixed': return 0n;
     case 'epoch': return 1n;
@@ -356,7 +358,7 @@ export function computeLinearTarget(
  * count the on-chain EPOCH bytecode embeds. Mirrors Photonic-Wallet
  * packages/lib/src/script.ts maxAdjustmentToLog2() exactly.
  */
-function epochMaxAdjustmentToLog2(value: number | undefined): bigint {
+export function epochMaxAdjustmentToLog2(value: number | undefined): bigint {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 2n; // default 4x
   if (value === 1 || value === 2 || value === 3 || value === 4) return BigInt(value); // already log2
   const factorToLog2: Record<number, bigint> = { 2: 1n, 4: 2n, 8: 3n, 16: 4n };
@@ -458,68 +460,20 @@ export function buildNextContractState(
   newHeight: bigint,
   txLockTime?: number,
 ): NextContractState {
-  if (isV2Contract(contract) && contract.codeScript) {
-    // V2: reconstruct full state script with updated mutable fields
-    const currentTime = BigInt(txLockTime || Math.floor(Date.now() / 1000));
-    const oldTarget = contract.target;
-    const lastTime = contract.lastTime ?? currentTime;
-    const targetTime = contract.targetTime ?? 60n;
-
-    // Compute DAA-adjusted target. Each branch must mirror the on-chain
-    // bytecode (Photonic-Wallet buildXxxDaaBytecode) exactly, otherwise the
-    // predicted next state won't match what the contract spend computes and
-    // the broadcast will be rejected as invalid.
-    let newTarget = oldTarget;
-    if (contract.daaMode === 'asert') {
-      // halfLife is embedded in bytecode, not state — use daaParams or default
-      const halfLife = BigInt(contract.daaParams?.halfLife || 3600);
-      newTarget = computeAsertTarget(oldTarget, lastTime, currentTime, targetTime, halfLife);
-    } else if (contract.daaMode === 'lwma') {
-      newTarget = computeLinearTarget(oldTarget, lastTime, currentTime, targetTime);
-    } else if (contract.daaMode === 'epoch') {
-      const epochLength = BigInt(contract.daaParams?.epochLength || 2016);
-      const maxAdjustmentLog2 = epochMaxAdjustmentToLog2(
-        contract.daaParams?.maxAdjustmentLog2 ?? contract.daaParams?.maxAdjustment
-      );
-      newTarget = computeEpochTarget(
-        oldTarget,
-        newHeight,
-        lastTime,
-        currentTime,
-        targetTime,
-        epochLength,
-        maxAdjustmentLog2,
-      );
-    } else if (contract.daaMode === 'schedule') {
-      newTarget = computeScheduleTarget(
-        oldTarget,
-        newHeight,
-        contract.daaParams?.schedule ?? [],
-      );
-    }
-    // fixed mode: newTarget = oldTarget (no change)
-
-    const nextStateScript = [
-      push4bytes(Number(newHeight)),
-      `d8${contract.contractRef}`,
-      `d0${contract.tokenRef}`,
-      pushMinimal(contract.maxHeight),
-      pushMinimal(contract.reward),
-      pushMinimal(contract.algoId ?? 0n),
-      pushMinimal(daaModeToId(contract.daaMode)),
-      pushMinimal(targetTime),
-      push4bytes(Number(currentTime)),
-      pushMinimal(newTarget),
-    ].join('');
-
-    return {
-      script: `${nextStateScript}bd${contract.codeScript}`,
-      target: newTarget,
-      lastTime: currentTime,
-    };
-  }
-
-  // V1: just replace height, preserve everything else
+  // Both V1 and V2: the deployed contract's PartC enforces
+  //   expected_next_state = push4(newHeight) || OP_STATESCRIPTBYTECODE_UTXO[5..]
+  // — i.e. only the height push (first 5 bytes) may change. Updating lastTime
+  // or target in the next state would trip OP_EQUALVERIFY at broadcast.
+  //
+  // (The V2 ASERT/LWMA/EPOCH/SCHEDULE DAA bytecode does compute a newTarget
+  // on the stack, but PartB4 drops it and PartC pins the next state to the
+  // old bytes. Until the on-chain bytecode is reworked to splice newTarget /
+  // newLastTime into the expected state, the next-state writer must keep
+  // those fields frozen on both V1 and V2.)
+  //
+  // Reference unused params so the function signature stays stable for callers
+  // that may want DAA propagation once the bytecode redesign lands.
+  void txLockTime;
   const nextStateScript = `${push4bytes(Number(newHeight))}${contract.script.substring(10)}`;
 
   if (contract.codeScript) {

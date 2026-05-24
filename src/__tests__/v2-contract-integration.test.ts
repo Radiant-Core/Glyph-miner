@@ -432,7 +432,21 @@ describe('V2 Contract Integration: Photonic → Miner Pipeline', () => {
   });
 });
 
-describe('V2 Contract Integration: buildNextContractState', () => {
+// SKIPPED — these tests were written against the previous behavior of
+// buildNextContractState, which updated `lastTime` to OP_TXLOCKTIME and
+// re-applied the DAA to produce a fresh `target` for the next state. That
+// behavior was incompatible with the deployed V2 contract bytecode, whose
+// PartC enforces `expected_next_state = push4(newHeight) || old_state[5..]`
+// — i.e. only the height push may change. With lastTime/target also moving,
+// every V2 broadcast tripped OP_EQUALVERIFY (and before the Part C underflow
+// fix in Photonic-Wallet 7f19cbb, never even reached that EQUALVERIFY —
+// stack-underflowed first). See Photonic-Wallet b3t-forensics/b3t2-root-cause.md.
+//
+// `buildNextContractState` now mirrors the V1 path for both V1 and V2:
+// preserve everything except height. Re-enable these tests once the V2
+// bytecode (PartB4 + PartC expected-next-state assembly) is reworked to
+// actually splice newLastTime + newTarget into the enforced next state.
+describe.skip('V2 Contract Integration: buildNextContractState', () => {
   describe('fixed DAA — target unchanged', () => {
     for (const algo of ['sha256d', 'blake3', 'k12']) {
       it(`${algo}/fixed preserves target`, async () => {
