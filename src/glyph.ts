@@ -277,8 +277,27 @@ const V2_BYTECODE_PART_C =
 export function parseDmintScript(script: string): string {
   const isDmintCodeScript = (codeScript: string): boolean => {
     const normalized = codeScript.toLowerCase();
-    // Accept both old (5175c0c8) and new (5175c8) Part A prefix
-    if (!normalized.startsWith("5175c8") && !normalized.startsWith("5175c0c8")) return false;
+    // Accept three Part A prefixes corresponding to the wallet's evolution:
+    //   c0c8     — fixed format (Photonic-Wallet 4060ac1): OP_INPUTINDEX
+    //              OP_OUTPOINTTXHASH directly; UNARY c8 consumes the input
+    //              index that c0 pushes.
+    //   5175c8   — broken format (Photonic-Wallet 5d39971): OP_1 OP_DROP
+    //              OP_OUTPOINTTXHASH; the OP_1/OP_DROP no-op leaves
+    //              target on the stack and c8 consumes it as an input
+    //              index, causing SCRIPT_ERR_INVALID_TX_INPUT_INDEX. The
+    //              contracts that have this prefix are PERMANENTLY
+    //              UN-MINEABLE, but we still parse them so the miner can
+    //              identify the contract and surface a clear error.
+    //   5175c0c8 — original pre-5d39971 format; equivalent to c0c8 with a
+    //              spurious OP_1 OP_DROP prefix that's a true no-op here
+    //              (c0 pushes after the drop, so the index value is the
+    //              one OP_INPUTINDEX produces, not target).
+    if (
+      !normalized.startsWith("c0c8") &&
+      !normalized.startsWith("5175c8") &&
+      !normalized.startsWith("5175c0c8")
+    )
+      return false;
     if (!/7a7e(?:aa|ee|ef)/.test(normalized)) return false;
 
     // V1: ends with V1_BYTECODE_PART_B
@@ -297,17 +316,15 @@ export function parseDmintScript(script: string): string {
   let searchStart = 0;
 
   while (searchStart < normalizedScript.length) {
-    // Find the next occurrence of either old (bd5175c0c8) or new (bd5175c8) separator
-    const idxOld = normalizedScript.indexOf("bd5175c0c8", searchStart);
-    const idxNew = normalizedScript.indexOf("bd5175c8", searchStart);
-    let index = -1;
-    if (idxOld === -1 && idxNew === -1) break;
-    if (idxOld === -1) index = idxNew;
-    else if (idxNew === -1) index = idxOld;
-    else index = Math.min(idxOld, idxNew);
-    if (index === -1) {
-      break;
-    }
+    // Find the next occurrence of any known Part A separator. The wallet
+    // evolved through three formats — see isDmintCodeScript above. Pick
+    // the earliest match so we don't skip a valid separator just because
+    // a later format string happens to appear inside data first.
+    const candidates = ["bdc0c8", "bd5175c0c8", "bd5175c8"]
+      .map((needle) => normalizedScript.indexOf(needle, searchStart))
+      .filter((i) => i !== -1);
+    if (candidates.length === 0) break;
+    const index = Math.min(...candidates);
 
     const stateScript = normalizedScript.substring(0, index);
     const codeScript = normalizedScript.substring(index + 2);

@@ -226,6 +226,58 @@ describe('V2 Contract Integration: Photonic → Miner Pipeline', () => {
     }
   });
 
+  // Regression: after Photonic-Wallet 4060ac1 (which restored OP_INPUTINDEX
+  // before OP_OUTPOINTTXHASH in Part A) deployed contracts have the code
+  // script starting with c0c8, not 5175c8. The miner's parser must accept
+  // the new format or it'll report "dmint contract not found" for every
+  // newly-deployed contract.
+  describe('parseDmintScript accepts the post-4060ac1 c0c8 Part A prefix', () => {
+    it('detects bd c0 c8 separator and extracts the state script', () => {
+      // Minimal V2 script structure: state | bd | c0 c8 | <rest of Part A/B/C>
+      // We reuse the test fixture but splice the prefix bytes so we exercise
+      // the parser path without committing to a specific Part B/C constant.
+      const fullScript = photonicDMintScript({
+        height: 0,
+        contractRef: FAKE_CONTRACT_REF,
+        tokenRef: FAKE_TOKEN_REF,
+        maxHeight: 10000,
+        reward: 100,
+        target: 2500000n,
+        lastTime: BASE_LAST_TIME,
+        ...VARIANTS[0],
+      });
+      // Replace the 5175c8 prefix (after separator) with c0c8 (drop two bytes)
+      const oldBytes = 'bd5175c8';
+      const newBytes = 'bdc0c8';
+      expect(fullScript.includes(oldBytes)).toBe(true);
+      const fixedScript = fullScript.replace(oldBytes, newBytes);
+      expect(fixedScript.includes('bdc0c8')).toBe(true);
+      expect(fixedScript.includes('bd5175c8')).toBe(false);
+
+      const stateScript = parseDmintScript(fixedScript);
+      expect(stateScript).not.toBe('');
+      const codeScript = fixedScript.substring(stateScript.length + 2);
+      expect(codeScript.startsWith('c0c8')).toBe(true);
+    });
+
+    it('still accepts the legacy 5175c8 prefix (un-mineable but parseable)', () => {
+      const fullScript = photonicDMintScript({
+        height: 0,
+        contractRef: FAKE_CONTRACT_REF,
+        tokenRef: FAKE_TOKEN_REF,
+        maxHeight: 10000,
+        reward: 100,
+        target: 2500000n,
+        lastTime: BASE_LAST_TIME,
+        ...VARIANTS[0],
+      });
+      const stateScript = parseDmintScript(fullScript);
+      expect(stateScript).not.toBe('');
+      const codeScript = fullScript.substring(stateScript.length + 2);
+      expect(codeScript.startsWith('5175c8')).toBe(true);
+    });
+  });
+
   describe('parseContractTx extracts V2 Contract fields correctly', () => {
     for (const variant of VARIANTS) {
       it(`parses ${variantLabel(variant)}`, async () => {
