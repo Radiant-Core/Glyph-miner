@@ -10,9 +10,18 @@ import {
   useIndexerApi,
   wallet,
 } from "./signals";
-import { shuffle } from "./utils";
 import { createWallet, openWallet } from "./wallet";
 
+// Server ordering matters for V2 (BLAKE3/K12) dMint contracts. ElectrumX
+// just forwards `transaction.broadcast` to the node behind it; the script
+// evaluator lives in that node. The radiantcore.org pair runs Radiant Core
+// (consensus implementation with OP_BLAKE3 / OP_K12); the bladenet and
+// radiant4people pair run the older Radiant-Node fork which treats those
+// opcodes as no-ops and rejects every V2 mint with a misleading
+// `SCRIPT_ERR_EQUALVERIFY`. Keeping Radiant Core servers at the top of the
+// list ensures the primary broadcast attempt goes to a node that can
+// actually validate the script. The fan-out in `broadcast()` covers the
+// stragglers if the primary is down.
 const defaultServers = [
   //"wss://electrumx-testnet.radiant4people.com:53002",
   "wss://electrumx.radiantcore.org:50011",
@@ -51,7 +60,9 @@ if (storedServers) {
   }
   servers.value = parsed;
 } else {
-  servers.value = shuffle(defaultServers);
+  // Deterministic order — first entries are Radiant Core nodes that
+  // accept V2 BLAKE3/K12 dMint contracts. See defaultServers comment.
+  servers.value = defaultServers.slice();
 }
 
 connect();

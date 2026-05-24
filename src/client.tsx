@@ -201,9 +201,125 @@ export async function fetchRef(ref: string) {
   return [];
 }
 
+// V2 BLAKE3/K12 dMint contracts are rejected by Radiant-Node-backed Electrum
+// servers (e.g. bladenet, radiant4people) because that fork doesn't implement
+// OP_BLAKE3/OP_K12 — the half-evaluated script then trips a downstream
+// EQUALVERIFY and the user sees a misleading "contract execution failed" log
+// even though the transaction is valid per Radiant Core consensus.
+//
+// `broadcast` first tries the currently-connected server (fast path; matches
+// the pre-fix behavior for V1 contracts and any non-V2 broadcast). If that
+// rejects, it fans out to the remaining configured servers in parallel via
+// short-lived WebSocket connections and treats the first successful submission
+// as authoritative — once any node accepts the tx, it propagates through
+// mempool gossip regardless of which front-end was used. All per-server
+// rejections are logged to the console for debugging but only the
+// "no server accepted" case bubbles up to the UI as a hard error.
 export async function broadcast(hex: string) {
   console.debug("Broadcasting transaction, length:", hex.length);
-  const result = await client.request("blockchain.transaction.broadcast", hex);
-  console.debug("Broadcast response:", result);
-  return result;
+  const primary = servers.value[serverNum];
+
+  try {
+    const result = await client.request("blockchain.transaction.broadcast", hex);
+    console.debug(`Broadcast accepted by primary ${primary}:`, result);
+    return result;
+  } catch (primaryErr) {
+    console.warn(`Primary server ${primary} rejected broadcast:`, primaryErr);
+
+    const others = servers.value.filter((s) => s !== primary);
+    if (others.length === 0) {
+      throw primaryErr;
+    }
+
+    addMessage({
+      type: "general",
+      msg: `Primary broadcast rejected; trying ${others.length} other server${others.length === 1 ? "" : "s"}...`,
+    });
+
+    const result = await broadcastFanOut(hex, others);
+    if (result.ok) {
+      addMessage({
+        type: "general",
+        msg: `Broadcast accepted by ${result.server} (primary disagreed — likely stale node behind ${primary})`,
+      });
+      return result.txid;
+    }
+
+    // All servers disagree with the primary too — surface the primary error
+    // since that's the most useful signal (matches the previous behavior).
+    throw primaryErr;
+  }
+}
+
+interface FanOutResult {
+  ok: boolean;
+  txid?: string;
+  server?: string;
+}
+
+async function broadcastFanOut(hex: string, urls: string[]): Promise<FanOutResult> {
+  // Each attempt is wrapped in a self-resolving Promise so Promise.race can
+  // surface the first success without short-circuiting the others (we want
+  // their console diagnostics even after a winner is declared).
+  let winner: FanOutResult | undefined;
+  const attempts = urls.map(
+    (url) =>
+      new Promise<FanOutResult>((resolve) => {
+        attemptBroadcastOnServer(url, hex)
+          .then((txid) => {
+            if (!winner) winner = { ok: true, txid, server: url };
+            resolve({ ok: true, txid, server: url });
+          })
+          .catch((err) => {
+            console.warn(`Server ${url} rejected broadcast:`, err);
+            resolve({ ok: false });
+          });
+      })
+  );
+
+  const results = await Promise.all(attempts);
+  return results.find((r) => r.ok) || winner || { ok: false };
+}
+
+function attemptBroadcastOnServer(url: string, hex: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const transient = new ElectrumWS(url);
+    const cleanup = () => {
+      try {
+        transient.close("");
+      } catch {
+        // best effort
+      }
+    };
+
+    // Hard cap: don't let a single hanging server slow the user down.
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`broadcast timeout on ${url}`));
+    }, 15000);
+
+    transient.on("connected", async () => {
+      try {
+        const txid = (await transient.request(
+          "blockchain.transaction.broadcast",
+          hex
+        )) as string;
+        clearTimeout(timeout);
+        cleanup();
+        resolve(txid);
+      } catch (err) {
+        clearTimeout(timeout);
+        cleanup();
+        reject(err);
+      }
+    });
+
+    transient.on("close", () => {
+      // If close fires before connected (connection refused, TLS error),
+      // surface that as a rejection so Promise.race can move on.
+      clearTimeout(timeout);
+      // No-op if we already resolved/rejected.
+      reject(new Error(`connection closed before broadcast on ${url}`));
+    });
+  });
 }
