@@ -270,8 +270,18 @@ const V2_BYTECODE_PART_B1 = "bc01147f77587f040000000088817600a269";
 const V2_BYTECODE_PART_B2 = "51797ca269";
 // V2 Part B.4: Stack cleanup (5x OP_DROP)
 const V2_BYTECODE_PART_B4 = "7575757575";
-// V2 Part C: Output validation (same as V1 Part C)
+// V2 Part C: Output validation (same as V1 Part C).
+//
+// Photonic-Wallet 7f19cbb dropped the leading `a269` (OP_GREATERTHANOREQUAL
+// OP_VERIFY "maxHeight >= reward" sanity prefix) because it consumed mh and r
+// that the V1-style continuation immediately needed for ROLL 7, causing every
+// V2 contract deployed before that fix to stack-underflow at broadcast (rejected
+// as SCRIPT_ERR_INVALID_STACK_OPERATION). The new (mineable) form is on top;
+// the legacy (un-mineable) form is kept so the parser can still surface those
+// contracts in the UI with the right error.
 const V2_BYTECODE_PART_C =
+  "577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551";
+const V2_BYTECODE_PART_C_LEGACY_UNMINEABLE =
   "a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551";
 
 export function parseDmintScript(script: string): string {
@@ -303,10 +313,14 @@ export function parseDmintScript(script: string): string {
     // V1: ends with V1_BYTECODE_PART_B
     if (normalized.endsWith(V1_BYTECODE_PART_B)) return true;
 
-    // V2: has B.1+B.2 after powHashOp, B.4 cleanup, and ends with Part C
+    // V2: has B.1+B.2 after powHashOp, B.4 cleanup, and ends with Part C.
+    // Accept both the fixed Part C and the legacy un-mineable form so the UI
+    // can still display the older contracts even though they can't be mined.
     const hasV2PartB = normalized.includes(V2_BYTECODE_PART_B1 + V2_BYTECODE_PART_B2);
     const hasV2Cleanup = normalized.includes(V2_BYTECODE_PART_B4);
-    const endsWithPartC = normalized.endsWith(V2_BYTECODE_PART_C);
+    const endsWithPartC =
+      normalized.endsWith(V2_BYTECODE_PART_C) ||
+      normalized.endsWith(V2_BYTECODE_PART_C_LEGACY_UNMINEABLE);
     if (hasV2PartB && hasV2Cleanup && endsWithPartC) return true;
 
     return false;
