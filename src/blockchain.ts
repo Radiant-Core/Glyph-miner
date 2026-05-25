@@ -455,6 +455,39 @@ export function isV2Contract(contract: Contract): boolean {
   return contract.algoId !== undefined && contract.daaMode !== undefined;
 }
 
+/**
+ * Lower bound on the wallet balance (in photons/sats) needed to fund one
+ * more mint of the given contract.
+ *
+ * Estimates `fee_for_tx + reward + dust + safety_margin`:
+ *
+ *   - V2 mint txs are ~1500-1600 bytes (state script + bytecode + signed
+ *     funding input). V1 are ~1300-1400. Use the high end for both so the
+ *     threshold cushions for nonce-length variance and signature DER size.
+ *   - At FEE_PER_KB the fee is `bytes / 1000 * FEE_PER_KB`. We multiply by
+ *     1.2 as a safety margin against actual-tx-size-bigger-than-estimate.
+ *   - Add the reward (paid to the mine-to address) plus 2 dust outputs
+ *     (1 sat next-contract + 0 sat OP_RETURN), rounded up to 2000 photons.
+ *
+ * Used by the mining loop to decide "do not start (or stop) mining when the
+ * next broadcast will be rejected with `min relay fee not met`."
+ *
+ * History: the previous low-balance checks (blockchain.ts:1039,1170 and
+ * Miner.tsx:100) compared `balance.value` (photons) to fractional RXD
+ * constants (0.0001, 0.01). Because photons ≥ 1 always exceeds 0.01, the
+ * checks effectively never fired — observed today (2026-05-25) when a K12T
+ * mine wasted nonce 2f51041d on a "fee not met" broadcast after the wallet
+ * balance dropped below the relay-fee floor mid-session.
+ */
+export function estimateMintBalanceFloorPhotons(contract: Contract): number {
+  const estimatedTxBytes = isV2Contract(contract) ? 1600 : 1400;
+  const estimatedFeePhotons = Math.ceil(
+    (estimatedTxBytes * FEE_PER_KB) / 1000 * 1.2
+  );
+  const dustPhotons = 2000;
+  return estimatedFeePhotons + Number(contract.reward) + dustPhotons;
+}
+
 export function buildNextContractState(
   contract: Contract,
   newHeight: bigint,
@@ -1036,8 +1069,14 @@ async function submit() {
       miningStatus.value = "change";
     }
 
-    if (balance.value < 0.0001 + Number(pendingContract.reward) / 100000000) {
-      addMessage({ type: "general", msg: "Balance is low" });
+    const floor = estimateMintBalanceFloorPhotons(pendingContract);
+    if (balance.value < floor) {
+      const needRxd = (floor / 100000000).toFixed(4);
+      const haveRxd = (balance.value / 100000000).toFixed(4);
+      addMessage({
+        type: "general",
+        msg: `Balance too low for next mint (need ~${needRxd} RXD, have ${haveRxd} RXD)`,
+      });
       miner.stop();
       miningEnabled.value = false;
       addMessage({ type: "stop" });
@@ -1167,10 +1206,13 @@ export async function changeToken(ref: string) {
 
   addMessage({ type: "loaded", ref, msg: token.contract.message });
 
-  if (balance.value < 0.01) {
+  const loadFloor = estimateMintBalanceFloorPhotons(token.contract);
+  if (balance.value < loadFloor) {
+    const needRxd = (loadFloor / 100000000).toFixed(4);
+    const haveRxd = (balance.value / 100000000).toFixed(4);
     addMessage({
       type: "general",
-      msg: "Balance is low. Please fund wallet to start mining.",
+      msg: `Balance is low (need ~${needRxd} RXD per mint, have ${haveRxd} RXD). Please fund wallet to start mining.`,
     });
   }
 

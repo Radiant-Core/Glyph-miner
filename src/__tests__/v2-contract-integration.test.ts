@@ -17,6 +17,7 @@ import {
   analyzeDmintPreimageStackLayout,
   buildNextContractState,
   isV2Contract,
+  estimateMintBalanceFloorPhotons,
   extractCodeScriptHashOp,
   findNonMinimalDataPush,
   computeAsertTarget,
@@ -35,8 +36,18 @@ import type { Contract } from '../types';
 const V2_BYTECODE_PART_B1 = 'bc01147f77587f040000000088817600a269';
 const V2_BYTECODE_PART_B2 = '51797ca269';
 const V2_BYTECODE_PART_B4 = '7575757575';
+// LEGACY V2 PartC — has the broken leading `a269` (mh≥r sanity) that consumed
+// items needed by the V1-style continuation, causing every V2 contract
+// deployed before Photonic-Wallet 7f19cbb to stack-underflow at PartC's
+// OP_ROLL 7. Kept here so the parser regression below can confirm we still
+// recognize these un-mineable contracts in the UI.
 const V2_BYTECODE_PART_C =
   'a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551';
+// POST-FIX V2 PartC — current Photonic-Wallet output (7f19cbb and later).
+// Identical to the legacy form with the leading `a269` removed; V1-style
+// PartC body then has the 8 items it needs at entry.
+const V2_BYTECODE_PART_C_POSTFIX =
+  '577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551';
 
 const POW_HASH_OPCODES: Record<string, string> = {
   sha256d: 'aa',
@@ -275,6 +286,68 @@ describe('V2 Contract Integration: Photonic → Miner Pipeline', () => {
       expect(stateScript).not.toBe('');
       const codeScript = fullScript.substring(stateScript.length + 2);
       expect(codeScript.startsWith('5175c8')).toBe(true);
+    });
+  });
+
+  // Regression for Photonic-Wallet 7f19cbb (drop leading `a269` from V2 PartC).
+  // The miner's parseDmintScript must accept the new PartC bytecode shape,
+  // otherwise every B3T3+ contract gets reported as "dmint contract not
+  // found" in the UI (observed earlier today; fixed by Glyph-miner a87dced).
+  describe('parseDmintScript accepts the post-7f19cbb PartC (no leading a269)', () => {
+    for (const variant of VARIANTS) {
+      it(`parses post-fix ${variantLabel(variant)}`, () => {
+        // Build a post-fix script: same shape as photonicDMintScript but with
+        // V2_BYTECODE_PART_C_POSTFIX and the c0c8 Part A prefix.
+        const legacy = photonicDMintScript({
+          height: 0,
+          contractRef: FAKE_CONTRACT_REF,
+          tokenRef: FAKE_TOKEN_REF,
+          maxHeight: 10000,
+          reward: 100,
+          target: 2500000n,
+          lastTime: BASE_LAST_TIME,
+          ...variant,
+        });
+        // Two substitutions to match what Photonic emits today:
+        //   bd5175c8 → bdc0c8     (4060ac1 Part A fix)
+        //   7575757575a269 → 7575757575577a (7f19cbb PartC fix)
+        // The first substitution drops two bytes; the second drops two bytes.
+        const postFix = legacy
+          .replace('bd5175c8', 'bdc0c8')
+          .replace(V2_BYTECODE_PART_C, V2_BYTECODE_PART_C_POSTFIX);
+
+        // Sanity: the post-fix script is 6 hex chars shorter — 2 from the
+        // Part A swap (bd5175c8 → bdc0c8) and 4 from PartC's removed leading a269.
+        expect(postFix.length).toBe(legacy.length - 6);
+        expect(postFix).not.toContain('7575757575a269');
+        expect(postFix).toContain('7575757575577a');
+        expect(postFix).not.toContain('bd5175c8');
+        expect(postFix).toContain('bdc0c8');
+
+        const stateScript = parseDmintScript(postFix);
+        expect(stateScript).not.toBe('');
+        const codeScript = postFix.substring(stateScript.length + 2);
+        expect(codeScript.startsWith('c0c8')).toBe(true);
+        expect(codeScript.endsWith(V2_BYTECODE_PART_C_POSTFIX)).toBe(true);
+      });
+    }
+
+    it('parser rejects a malformed PartC (sanity check the assertion is meaningful)', () => {
+      const legacy = photonicDMintScript({
+        height: 0,
+        contractRef: FAKE_CONTRACT_REF,
+        tokenRef: FAKE_TOKEN_REF,
+        maxHeight: 10000,
+        reward: 100,
+        target: 2500000n,
+        lastTime: BASE_LAST_TIME,
+        ...VARIANTS[0],
+      });
+      // Replace the trailing OP_1 (51) with OP_2 (52) — a one-byte mutation
+      // that should break the "endsWith V2_BYTECODE_PART_C" check.
+      const broken = legacy.slice(0, -2) + '52';
+      const stateScript = parseDmintScript(broken);
+      expect(stateScript).toBe('');
     });
   });
 
@@ -1188,5 +1261,51 @@ describe('computeScheduleTarget — mirrors on-chain SCHEDULE bytecode', () => {
     ];
     expect(computeScheduleTarget(oldTarget, 3000n, shuffled)).toBe(250_000n);
     expect(computeScheduleTarget(oldTarget, 999n, shuffled)).toBe(oldTarget);
+  });
+});
+
+// Regression for the 2026-05-25 "fee not met" failure mode: the prior
+// low-balance gates compared `balance.value` (photons) to fractional RXD
+// constants (0.0001, 0.01) and therefore effectively never fired, letting
+// the miner waste a nonce on a tx the node would reject for insufficient
+// fee. The pre-mining check is now `balance.value < estimateMintBalanceFloorPhotons(contract)`.
+describe('estimateMintBalanceFloorPhotons — fee-headroom pre-check', () => {
+  const baseV2Contract: Partial<Contract> = {
+    algoId: 1n,           // present → isV2Contract returns true
+    daaMode: 'asert',
+    reward: 10n,
+  };
+  const baseV1Contract: Partial<Contract> = {
+    reward: 1000n,        // V1 contracts often have non-trivial reward
+    // algoId / daaMode undefined → isV2Contract returns false
+  };
+
+  it('returns a realistic V2 floor (~17M+ photons given FEE_PER_KB)', () => {
+    const floor = estimateMintBalanceFloorPhotons(baseV2Contract as Contract);
+    // V2 estimate is 1600 bytes × FEE_PER_KB / 1000 × 1.2 = ~20.16M photons
+    // plus reward (10) + dust (2000). Sanity bound: ≥ 15M, ≤ 30M.
+    expect(floor).toBeGreaterThan(15_000_000);
+    expect(floor).toBeLessThan(30_000_000);
+  });
+
+  it('V2 floor strictly exceeds V1 floor for matching reward', () => {
+    const v1 = estimateMintBalanceFloorPhotons({ reward: 10n } as Contract);
+    const v2 = estimateMintBalanceFloorPhotons(baseV2Contract as Contract);
+    expect(v2).toBeGreaterThan(v1);
+  });
+
+  it('floor scales with reward', () => {
+    const cheap = estimateMintBalanceFloorPhotons({ ...baseV1Contract, reward: 1n } as Contract);
+    const pricey = estimateMintBalanceFloorPhotons({ ...baseV1Contract, reward: 1_000_000n } as Contract);
+    expect(pricey - cheap).toBe(999_999);
+  });
+
+  it('floor is large enough that 0.01 RXD (1M photons) DOES trip the gate', () => {
+    // Specific regression for the unit-bug: 0.01 RXD = 1,000,000 photons.
+    // Pre-fix this passed the `balance.value > 0.01 + reward` check (because
+    // `balance.value > 0.01` is trivially true when balance is photons).
+    // Post-fix it must FAIL the floor check.
+    const v2Floor = estimateMintBalanceFloorPhotons(baseV2Contract as Contract);
+    expect(1_000_000).toBeLessThan(v2Floor);
   });
 });

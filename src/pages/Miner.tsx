@@ -31,7 +31,7 @@ import {
   selectedContract,
   work,
 } from "../signals";
-import { changeToken } from "../blockchain";
+import { changeToken, estimateMintBalanceFloorPhotons } from "../blockchain";
 import Rejected from "../Rejected";
 import TopBar from "../TopBar";
 import "../initGpu";
@@ -93,11 +93,17 @@ export default function Miner() {
   };
 
   const gpuSupported = navigator.gpu && gpu.value !== undefined;
-  const reward = Number(contract.value?.reward || 0) / 100000000;
+  // balance.value is in photons; compare against the per-contract floor.
+  // The previous `balance.value > 0.01 + reward` compared photons to a
+  // fractional RXD constant and effectively always evaluated true, allowing
+  // the Start button even when the wallet couldn't fund a single mint.
+  const balanceFloorPhotons = contract.value
+    ? estimateMintBalanceFloorPhotons(contract.value)
+    : Infinity;
   const canStart =
     contract.value !== undefined &&
     contract.value.height < contract.value.maxHeight &&
-    balance.value > 0.01 + reward &&
+    balance.value >= balanceFloorPhotons &&
     mineToAddress.value &&
     serverStatus.value === ServerStatus.CONNECTED;
 
