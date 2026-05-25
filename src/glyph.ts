@@ -270,6 +270,11 @@ const V2_BYTECODE_PART_B1 = "bc01147f77587f040000000088817600a269";
 const V2_BYTECODE_PART_B2 = "51797ca269";
 // V2 Part B.4: Stack cleanup (5x OP_DROP)
 const V2_BYTECODE_PART_B4 = "7575757575";
+// V3 Part B.4: TOALTSTACK newTarget + 4x OP_DROP. Preserves DAA-computed
+// newTarget on the altstack so PartC can splice it into the next state.
+// See b3t-forensics/v3-daa-propagation-design.md.
+const V3_BYTECODE_PART_B4 = "6b75757575";
+
 // V2 Part C: Output validation (same as V1 Part C).
 //
 // Photonic-Wallet 7f19cbb dropped the leading `a269` (OP_GREATERTHANOREQUAL
@@ -283,6 +288,13 @@ const V2_BYTECODE_PART_C =
   "577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551";
 const V2_BYTECODE_PART_C_LEGACY_UNMINEABLE =
   "a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551";
+
+// V3 Part C: V2 PartC + leading `6c75` in the IF branch (final-mint path
+// consumes alt-newTarget) + strip-tail/build-newLastTime/build-newTarget
+// segments in the ELSE branch (continue-mining splices new lt+tgt into the
+// enforced next state). 23 bytes longer than V2 PartC.
+const V3_BYTECODE_PART_C =
+  "577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d636c755279cd01d853797e016a7e886778de519d547854807ec0eb557f77825e947f757ec5548001047c7e7e6c588001087c7e7e5379ec78885379eac0e9885379cc519d75686d7551";
 
 export function parseDmintScript(script: string): string {
   const isDmintCodeScript = (codeScript: string): boolean => {
@@ -313,15 +325,22 @@ export function parseDmintScript(script: string): string {
     // V1: ends with V1_BYTECODE_PART_B
     if (normalized.endsWith(V1_BYTECODE_PART_B)) return true;
 
-    // V2: has B.1+B.2 after powHashOp, B.4 cleanup, and ends with Part C.
-    // Accept both the fixed Part C and the legacy un-mineable form so the UI
-    // can still display the older contracts even though they can't be mined.
+    // V2/V3 share PartB1+PartB2 (PoW + target comparison). They differ in
+    // PartB4 and PartC:
+    //   V2: PartB4 = 5×OP_DROP (`7575757575`), PartC drops the DAA newTarget.
+    //   V3: PartB4 = TOALTSTACK + 4×OP_DROP (`6b75757575`), PartC splices the
+    //       alt-newTarget + OP_TXLOCKTIME into the enforced next state.
+    // Accept either shape so the miner can drive both legacy V2 and new V3
+    // contracts.
     const hasV2PartB = normalized.includes(V2_BYTECODE_PART_B1 + V2_BYTECODE_PART_B2);
     const hasV2Cleanup = normalized.includes(V2_BYTECODE_PART_B4);
-    const endsWithPartC =
+    const hasV3Cleanup = normalized.includes(V3_BYTECODE_PART_B4);
+    const endsWithV2PartC =
       normalized.endsWith(V2_BYTECODE_PART_C) ||
       normalized.endsWith(V2_BYTECODE_PART_C_LEGACY_UNMINEABLE);
-    if (hasV2PartB && hasV2Cleanup && endsWithPartC) return true;
+    const endsWithV3PartC = normalized.endsWith(V3_BYTECODE_PART_C);
+    if (hasV2PartB && hasV2Cleanup && endsWithV2PartC) return true;
+    if (hasV2PartB && hasV3Cleanup && endsWithV3PartC) return true;
 
     return false;
   };

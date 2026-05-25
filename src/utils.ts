@@ -162,3 +162,19 @@ export function pushMinimal(n: bigint | number) {
 
   return bytesToHex(encodeDataPush(bigIntToVmNumber(value)));
 }
+
+// Push a target as exactly `08 [8-byte LE]` — required by V3 dMint state
+// scripts so PartC can locate the lastTime+target suffix at a fixed offset.
+// See b3t-forensics/v3-daa-propagation-design.md.
+export function pushTarget9Bytes(target: bigint): string {
+  if (target < 0n || target > 0x7fffffffffffffffn) {
+    throw new Error(`V3 target out of range (0 ≤ target ≤ MAX_TARGET): ${target}`);
+  }
+  const bytes = new Uint8Array(8);
+  let v = target;
+  for (let i = 0; i < 8; i++) {
+    bytes[i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+  return "08" + bytesToHex(bytes);
+}

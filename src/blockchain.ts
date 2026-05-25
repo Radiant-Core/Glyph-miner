@@ -26,6 +26,7 @@ import {
   scriptHash,
   deriveSubContractRefCandidates,
   push4bytes,
+  pushTarget9Bytes,
 } from "./utils";
 import { broadcast, client, fetchRef, fetchTx } from "./client";
 import { Contract, Work, Utxo, AlgorithmId } from "./types";
@@ -456,6 +457,18 @@ export function isV2Contract(contract: Contract): boolean {
 }
 
 /**
+ * V3 dMint contracts are detected by their PartB4 shape: TOALTSTACK +
+ * 4×OP_DROP (`6b75757575`) instead of V2's 5×OP_DROP (`7575757575`).
+ * The TOALTSTACK byte (`6b`) is the canonical marker — preserves the
+ * DAA-computed newTarget on the altstack so PartC can splice it into the
+ * enforced next state. See b3t-forensics/v3-daa-propagation-design.md.
+ */
+export function isV3Contract(contract: Contract): boolean {
+  if (!isV2Contract(contract) || !contract.codeScript) return false;
+  return contract.codeScript.toLowerCase().includes("6b75757575");
+}
+
+/**
  * Lower bound on the wallet balance (in photons/sats) needed to fund one
  * more mint of the given contract.
  *
@@ -493,19 +506,93 @@ export function buildNextContractState(
   newHeight: bigint,
   txLockTime?: number,
 ): NextContractState {
-  // Both V1 and V2: the deployed contract's PartC enforces
+  // V3 contracts enforce a next state where height, lastTime, and target ALL
+  // update. PartC's `82 5e 94 7f 75` strips the old 14-byte tail (old lt +
+  // old target pushes) and PartC's TXLOCKTIME + FROMALTSTACK splices in the
+  // new lt and the DAA-computed newTarget. The miner must build the next
+  // state to match: same prefix + middle, but with the new height push at
+  // the front and `04 [newLt4] 08 [newTarget8]` at the tail.
+  if (isV3Contract(contract) && contract.codeScript) {
+    const currentTime = BigInt(txLockTime || Math.floor(Date.now() / 1000));
+    const oldTarget = contract.target;
+    const lastTime = contract.lastTime ?? currentTime;
+    const targetTime = contract.targetTime ?? 60n;
+
+    let newTarget = oldTarget;
+    if (contract.daaMode === "asert") {
+      const halfLife = BigInt(contract.daaParams?.halfLife || 3600);
+      newTarget = computeAsertTarget(
+        oldTarget,
+        lastTime,
+        currentTime,
+        targetTime,
+        halfLife,
+      );
+    } else if (contract.daaMode === "lwma") {
+      newTarget = computeLinearTarget(
+        oldTarget,
+        lastTime,
+        currentTime,
+        targetTime,
+      );
+    } else if (contract.daaMode === "epoch") {
+      const epochLength = BigInt(contract.daaParams?.epochLength || 2016);
+      const maxAdjustmentLog2 = epochMaxAdjustmentToLog2(
+        contract.daaParams?.maxAdjustmentLog2 ??
+          contract.daaParams?.maxAdjustment,
+      );
+      newTarget = computeEpochTarget(
+        oldTarget,
+        newHeight,
+        lastTime,
+        currentTime,
+        targetTime,
+        epochLength,
+        maxAdjustmentLog2,
+      );
+    } else if (contract.daaMode === "schedule") {
+      newTarget = computeScheduleTarget(
+        oldTarget,
+        newHeight,
+        contract.daaParams?.schedule ?? [],
+      );
+    }
+    // fixed: newTarget = oldTarget (no change)
+
+    // Slice the old state script into prefix (height) + middle (everything
+    // between height and tail) + tail (lt + target). For V3 the tail is
+    // ALWAYS 14 bytes (5 for `04 [lt4]` + 9 for `08 [target8]`), so the old
+    // state hex ends at `script.length - 28` (in hex chars).
+    const oldStateHex = contract.script; // already hex
+    if (oldStateHex.length < 5 * 2 + 14 * 2) {
+      throw new Error("V3 contract state script unexpectedly short");
+    }
+    // Strip leading 5-byte height push (10 hex chars) and trailing 14-byte
+    // lt+tgt block (28 hex chars). What remains is the unchanged middle.
+    const middle = oldStateHex.substring(10, oldStateHex.length - 28);
+    const newHeightPush = push4bytes(Number(newHeight));
+    const newLastTimePush = push4bytes(Number(currentTime));
+    const newTargetPush = pushTarget9Bytes(newTarget);
+    const nextStateScript = `${newHeightPush}${middle}${newLastTimePush}${newTargetPush}`;
+
+    return {
+      script: `${nextStateScript}bd${contract.codeScript}`,
+      target: newTarget,
+      lastTime: currentTime,
+    };
+  }
+
+  // V1 and pre-V3 V2: the deployed contract's PartC enforces
   //   expected_next_state = push4(newHeight) || OP_STATESCRIPTBYTECODE_UTXO[5..]
   // — i.e. only the height push (first 5 bytes) may change. Updating lastTime
   // or target in the next state would trip OP_EQUALVERIFY at broadcast.
   //
   // (The V2 ASERT/LWMA/EPOCH/SCHEDULE DAA bytecode does compute a newTarget
   // on the stack, but PartB4 drops it and PartC pins the next state to the
-  // old bytes. Until the on-chain bytecode is reworked to splice newTarget /
-  // newLastTime into the expected state, the next-state writer must keep
-  // those fields frozen on both V1 and V2.)
+  // old bytes. V3 contracts replace PartB4+PartC to actually propagate the
+  // DAA result; see the isV3Contract branch above.)
   //
-  // Reference unused params so the function signature stays stable for callers
-  // that may want DAA propagation once the bytecode redesign lands.
+  // Reference unused params so the function signature stays stable.
   void txLockTime;
   const nextStateScript = `${push4bytes(Number(newHeight))}${contract.script.substring(10)}`;
 

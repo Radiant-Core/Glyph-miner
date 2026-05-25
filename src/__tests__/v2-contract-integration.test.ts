@@ -17,6 +17,7 @@ import {
   analyzeDmintPreimageStackLayout,
   buildNextContractState,
   isV2Contract,
+  isV3Contract,
   estimateMintBalanceFloorPhotons,
   extractCodeScriptHashOp,
   findNonMinimalDataPush,
@@ -28,6 +29,7 @@ import {
   mapHashOpToAlgorithm,
   unlockingOutputIndexOpcodeHex,
 } from '../blockchain';
+import { pushTarget9Bytes } from '../utils';
 import type { Contract } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -1307,5 +1309,204 @@ describe('estimateMintBalanceFloorPhotons — fee-headroom pre-check', () => {
     // Post-fix it must FAIL the floor check.
     const v2Floor = estimateMintBalanceFloorPhotons(baseV2Contract as Contract);
     expect(1_000_000).toBeLessThan(v2Floor);
+  });
+});
+
+// V3 contract shape: the parser must recognize V3 contracts, the
+// next-state writer must propagate the DAA-computed newTarget + new
+// lastTime into the enforced state. See
+// b3t-forensics/v3-daa-propagation-design.md.
+describe('V3 contract — DAA propagation', () => {
+  const V3_PARTB4 = '6b75757575';
+  const V3_PARTC =
+    '577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d636c755279cd01d853797e016a7e886778de519d547854807ec0eb557f77825e947f757ec5548001047c7e7e6c588001087c7e7e5379ec78885379eac0e9885379cc519d75686d7551';
+
+  // Build a synthetic V3 script using the same buildPartA helper as V2 tests,
+  // but with V3 PartB4 and V3 PartC. Target push is exactly 9 bytes.
+  function buildV3Script(opts: {
+    height: number;
+    target: bigint;
+    algorithm: 'sha256d' | 'blake3' | 'k12';
+    daaMode: 'fixed' | 'asert' | 'lwma';
+    lastTime: number;
+  }): string {
+    const algoId = ALGO_IDS[opts.algorithm];
+    const daaId = DAA_MODE_IDS[opts.daaMode];
+    const powHashOp = POW_HASH_OPCODES[opts.algorithm];
+    const stateScript = [
+      push4bytes(opts.height),
+      `d8${FAKE_CONTRACT_REF}`,
+      `d0${FAKE_TOKEN_REF}`,
+      pushMinimal(10000n),  // maxHeight
+      pushMinimal(100n),    // reward
+      pushMinimal(BigInt(algoId)),
+      pushMinimal(BigInt(daaId)),
+      pushMinimal(60n),     // targetTime
+      push4bytes(opts.lastTime),
+      pushTarget9Bytes(opts.target),  // fixed 9-byte target push
+    ].join('');
+    let daaBytecode = '';
+    if (opts.daaMode === 'asert') daaBytecode = buildAsertDaaBytecode(3600);
+    else if (opts.daaMode === 'lwma') daaBytecode = buildLinearDaaBytecode();
+    // V3 uses the c0c8 (post-4060ac1) Part A prefix — buildPartA emits the
+    // legacy 5175c8 form so swap it after construction. The PICK/ROLL
+    // indices are unchanged because both prefixes consume net 0 stack
+    // items before the first PICK.
+    const partA = buildPartA(10).replace(/^5175c8/, 'c0c8');
+    const partB = `${V2_BYTECODE_PART_B1}${V2_BYTECODE_PART_B2}${daaBytecode}${V3_PARTB4}`;
+    const bytecode = `${partA}${powHashOp}${partB}${V3_PARTC}`;
+    return `${stateScript}bd${bytecode}`;
+  }
+
+  describe('parseDmintScript accepts V3 contracts', () => {
+    for (const variant of VARIANTS) {
+      it(`parses V3 ${variantLabel(variant)}`, () => {
+        const v3Script = buildV3Script({
+          height: 0,
+          target: 0x0cccccccccccccccn,
+          algorithm: variant.algorithm as 'sha256d' | 'blake3' | 'k12',
+          daaMode: variant.daaMode as 'fixed' | 'asert' | 'lwma',
+          lastTime: BASE_LAST_TIME,
+        });
+        const stateScript = parseDmintScript(v3Script);
+        expect(stateScript).not.toBe('');
+        const codeScript = v3Script.substring(stateScript.length + 2);
+        expect(codeScript.startsWith('c0c8')).toBe(true);
+        expect(codeScript.includes(V3_PARTB4)).toBe(true);
+        expect(codeScript.endsWith(V3_PARTC)).toBe(true);
+      });
+    }
+  });
+
+  describe('isV3Contract detects V3 shape via PartB4 marker', () => {
+    it('returns true when codeScript contains `6b75757575`', () => {
+      const contract = {
+        algoId: 1n,
+        daaMode: 'asert' as const,
+        codeScript: 'c0c8...6b75757575577a...686d7551',  // synthetic
+      };
+      expect(isV3Contract(contract as Contract)).toBe(true);
+    });
+    it('returns false for V2 codeScript (5×OP_DROP)', () => {
+      const contract = {
+        algoId: 1n,
+        daaMode: 'asert' as const,
+        codeScript: 'c0c8...7575757575577a...686d7551',
+      };
+      expect(isV3Contract(contract as Contract)).toBe(false);
+    });
+    it('returns false for V1 contracts (no algoId/daaMode)', () => {
+      const contract = { codeScript: 'anything' };
+      expect(isV3Contract(contract as Contract)).toBe(false);
+    });
+  });
+
+  describe('buildNextContractState propagates DAA on V3 ASERT contract', () => {
+    it('next state has new height, new lastTime, AND new target slots', () => {
+      // Build a V3 ASERT contract that ran for a long enough time-delta to
+      // produce a non-trivial drift, so newTarget != oldTarget.
+      const oldTarget = 0x0cccccccccccccccn;
+      const oldLastTime = 1_700_000_000n;
+      const newLockTime = Number(oldLastTime + 7200n); // 2-hour delta → drift > 0
+      const script = buildV3Script({
+        height: 0,
+        target: oldTarget,
+        algorithm: 'blake3',
+        daaMode: 'asert',
+        lastTime: Number(oldLastTime),
+      });
+      const codeScriptIdx = script.indexOf('bd');
+      const stateScript = script.substring(0, codeScriptIdx);
+      const codeScript = script.substring(codeScriptIdx + 2);
+
+      const contract: Partial<Contract> = {
+        script: stateScript,
+        codeScript,
+        height: 0n,
+        contractRef: FAKE_CONTRACT_REF,
+        tokenRef: FAKE_TOKEN_REF,
+        maxHeight: 10000n,
+        reward: 100n,
+        algoId: 1n,
+        daaMode: 'asert',
+        targetTime: 60n,
+        lastTime: oldLastTime,
+        target: oldTarget,
+        daaParams: { halfLife: 3600, targetTime: 60 },
+      };
+
+      const next = buildNextContractState(
+        contract as Contract,
+        1n,
+        newLockTime,
+      );
+
+      // newTarget must differ from oldTarget when DAA had non-zero drift.
+      expect(next.target).not.toBe(oldTarget);
+      // newLastTime must be updated to txLockTime.
+      expect(next.lastTime).toBe(BigInt(newLockTime));
+      // The script's last 28 hex chars = 14 bytes = `04 [newLt4] 08 [newTarget8]`.
+      const sep = next.script.indexOf('bd');
+      const newStateHex = next.script.substring(0, sep);
+      const tail = newStateHex.substring(newStateHex.length - 28);
+      expect(tail.substring(0, 2)).toBe('04');
+      expect(tail.substring(10, 12)).toBe('08');
+      // Height push at start must be `04 01000000` = newHeight=1.
+      expect(newStateHex.substring(0, 10)).toBe('0401000000');
+    });
+
+    it('next state preserves contract & token refs + middle slots byte-for-byte', () => {
+      const oldTarget = 0x0cccccccccccccccn;
+      const oldLastTime = 1_700_000_000n;
+      const script = buildV3Script({
+        height: 5,
+        target: oldTarget,
+        algorithm: 'blake3',
+        daaMode: 'fixed', // fixed = no DAA, target stays
+        lastTime: Number(oldLastTime),
+      });
+      const codeScriptIdx = script.indexOf('bd');
+      const stateScript = script.substring(0, codeScriptIdx);
+      const codeScript = script.substring(codeScriptIdx + 2);
+
+      const contract: Partial<Contract> = {
+        script: stateScript,
+        codeScript,
+        height: 5n,
+        contractRef: FAKE_CONTRACT_REF,
+        tokenRef: FAKE_TOKEN_REF,
+        maxHeight: 10000n,
+        reward: 100n,
+        algoId: 1n,
+        daaMode: 'fixed',
+        targetTime: 60n,
+        lastTime: oldLastTime,
+        target: oldTarget,
+      };
+
+      const newLockTime = Number(oldLastTime + 60n);
+      const next = buildNextContractState(
+        contract as Contract,
+        6n,
+        newLockTime,
+      );
+
+      // Middle (everything between height push and tail) must equal
+      // the old state's middle byte-for-byte. Compare via slicing.
+      const oldSep = stateScript.indexOf(''); // start
+      void oldSep;
+      const oldMiddle = stateScript.substring(10, stateScript.length - 28);
+
+      const newSep = next.script.indexOf('bd');
+      const newStateHex = next.script.substring(0, newSep);
+      const newMiddle = newStateHex.substring(10, newStateHex.length - 28);
+
+      expect(newMiddle).toBe(oldMiddle);
+      // Fixed-DAA: newTarget == oldTarget (no change).
+      expect(next.target).toBe(oldTarget);
+      // But lastTime DOES update — V3 always advances it (it's a state slot
+      // the contract validates against OP_TXLOCKTIME).
+      expect(next.lastTime).toBe(BigInt(newLockTime));
+    });
   });
 });
