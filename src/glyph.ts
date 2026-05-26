@@ -268,33 +268,28 @@ const V1_BYTECODE_PART_B =
 const V2_BYTECODE_PART_B1 = "bc01147f77587f040000000088817600a269";
 // V2 Part B.2: Target comparison with preservation
 const V2_BYTECODE_PART_B2 = "51797ca269";
-// V2 Part B.4: Stack cleanup (5x OP_DROP)
-const V2_BYTECODE_PART_B4 = "7575757575";
-// V3 Part B.4: TOALTSTACK newTarget + 4x OP_DROP. Preserves DAA-computed
-// newTarget on the altstack so PartC can splice it into the next state.
-// See b3t-forensics/v3-daa-propagation-design.md.
-const V3_BYTECODE_PART_B4 = "6b75757575";
+// V2 Part B.4 (post-2026-05-26 redesign): TOALTSTACK newTarget + 4×OP_DROP.
+// Preserves DAA-computed newTarget on the alt stack so PartC can splice it
+// into the next state. See b3t-forensics/V2_CONTRACT_AUDIT_REMEDIATION.md §§7-8.
+const V2_BYTECODE_PART_B4 = "6b75757575";
 
-// V2 Part C: Output validation (same as V1 Part C).
+// V2 PartC is now deploy-parameterized (it embeds items 2-8 of the state as a
+// literal blob, and uses a runtime MINIMAL_PUSH primitive for height/target).
+// We can no longer match PartC against a fixed constant; instead we match
+// against the constant suffix that follows the variable middle.
 //
-// Photonic-Wallet 7f19cbb dropped the leading `a269` (OP_GREATERTHANOREQUAL
-// OP_VERIFY "maxHeight >= reward" sanity prefix) because it consumed mh and r
-// that the V1-style continuation immediately needed for ROLL 7, causing every
-// V2 contract deployed before that fix to stack-underflow at broadcast (rejected
-// as SCRIPT_ERR_INVALID_STACK_OPERATION). The new (mineable) form is on top;
-// the legacy (un-mineable) form is kept so the parser can still surface those
-// contracts in the UI with the right error.
-const V2_BYTECODE_PART_C =
-  "577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551";
-const V2_BYTECODE_PART_C_LEGACY_UNMINEABLE =
-  "a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551";
+// The suffix is: continuation-state EQUALVERIFY chain → codescript continuity
+// EQUALVERIFY → output value == reward NUMEQUALVERIFY → ENDIF 2DROP DROP 1.
+// 21 bytes (42 hex chars).
+const V2_BYTECODE_PART_C_SUFFIX =
+  "5379ec78885379eac0e9885379cc519d75686d7551";
 
-// V3 Part C: V2 PartC + leading `6c75` in the IF branch (final-mint path
-// consumes alt-newTarget) + strip-tail/build-newLastTime/build-newTarget
-// segments in the ELSE branch (continue-mining splices new lt+tgt into the
-// enforced next state). 23 bytes longer than V2 PartC.
-const V3_BYTECODE_PART_C =
-  "577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d636c755279cd01d853797e016a7e886778de519d547854807ec0eb557f77825e947f757ec5548001047c7e7e6c588001087c7e7e5379ec78885379eac0e9885379cc519d75686d7551";
+// Distinctive 21-byte signature of the MINIMAL_PUSH primitive (PartC subroutine).
+// PartC inlines MINIMAL_PUSH exactly twice — once for newHeight, once for the
+// alt-stack newTarget. Presence of this signature is the strongest marker
+// that the code script is a post-redesign V2 dMint.
+const MINIMAL_PUSH_SIGNATURE =
+  "76009c637501006776" + "60" + "a16301509351806782" + "7c7e6868";
 
 export function parseDmintScript(script: string): string {
   const isDmintCodeScript = (codeScript: string): boolean => {
@@ -325,22 +320,27 @@ export function parseDmintScript(script: string): string {
     // V1: ends with V1_BYTECODE_PART_B
     if (normalized.endsWith(V1_BYTECODE_PART_B)) return true;
 
-    // V2/V3 share PartB1+PartB2 (PoW + target comparison). They differ in
-    // PartB4 and PartC:
-    //   V2: PartB4 = 5×OP_DROP (`7575757575`), PartC drops the DAA newTarget.
-    //   V3: PartB4 = TOALTSTACK + 4×OP_DROP (`6b75757575`), PartC splices the
-    //       alt-newTarget + OP_TXLOCKTIME into the enforced next state.
-    // Accept either shape so the miner can drive both legacy V2 and new V3
-    // contracts.
-    const hasV2PartB = normalized.includes(V2_BYTECODE_PART_B1 + V2_BYTECODE_PART_B2);
-    const hasV2Cleanup = normalized.includes(V2_BYTECODE_PART_B4);
-    const hasV3Cleanup = normalized.includes(V3_BYTECODE_PART_B4);
-    const endsWithV2PartC =
-      normalized.endsWith(V2_BYTECODE_PART_C) ||
-      normalized.endsWith(V2_BYTECODE_PART_C_LEGACY_UNMINEABLE);
-    const endsWithV3PartC = normalized.endsWith(V3_BYTECODE_PART_C);
-    if (hasV2PartB && hasV2Cleanup && endsWithV2PartC) return true;
-    if (hasV2PartB && hasV3Cleanup && endsWithV3PartC) return true;
+    // V2 (post-2026-05-26 redesign): the launch shape. PartB1+PartB2 are
+    // unchanged from the pre-redesign V2, PartB4 is `6b75757575` (TOALTSTACK
+    // + 4×DROP). PartC is variable-length but always ends in
+    // V2_BYTECODE_PART_C_SUFFIX and contains MINIMAL_PUSH_SIGNATURE exactly
+    // twice. We don't try to parse pre-redesign V2/V3 deploys (B3T2, K12T,
+    // DEEZ, apple, VRT, etc.) — those were test tokens and considered
+    // disposable.
+    const hasV2PartB =
+      normalized.includes(V2_BYTECODE_PART_B1 + V2_BYTECODE_PART_B2);
+    const hasNewPartB4 = normalized.includes(V2_BYTECODE_PART_B4);
+    const endsWithPartCSuffix = normalized.endsWith(V2_BYTECODE_PART_C_SUFFIX);
+    const minimalPushOccurrences =
+      normalized.split(MINIMAL_PUSH_SIGNATURE).length - 1;
+    if (
+      hasV2PartB &&
+      hasNewPartB4 &&
+      endsWithPartCSuffix &&
+      minimalPushOccurrences === 2
+    ) {
+      return true;
+    }
 
     return false;
   };

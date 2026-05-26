@@ -26,7 +26,7 @@ import {
   scriptHash,
   deriveSubContractRefCandidates,
   push4bytes,
-  pushTarget9Bytes,
+  pushMinimal,
 } from "./utils";
 import { broadcast, client, fetchRef, fetchTx } from "./client";
 import { Contract, Work, Utxo, AlgorithmId } from "./types";
@@ -277,20 +277,61 @@ function normalizeNonceHex(nonceHex: string, nonceBytes: 4 | 8): string {
   return normalizeNonceHexForScriptSig(nonceHex, nonceBytes);
 }
 
+/**
+ * Walks a script's push opcodes and returns a description of the first push
+ * that would fail radiantd's CheckMinimalPush (Radiant-Core
+ * src/script/script.cpp:374), or undefined if all pushes are minimal.
+ *
+ * Replaces a pre-redesign heuristic that used Script.fromHex().toASM() and
+ * matched single 2-char hex tokens — that approach false-flagged any direct
+ * push of a single byte in [1..16] or 0x81 (catching real MINIMALDATA
+ * violations) AND false-positive-flagged the byte `0x00` (which is minimal
+ * when pushed as `01 00`, since OP_0 pushes empty rather than [0x00]). The
+ * new walker matches CheckMinimalPush byte-for-byte: only single-byte data
+ * pushes whose payload is in [1..16] or equals 0x81 are non-minimal, plus
+ * PUSHDATA1/2/4 used below their length thresholds.
+ */
 export function findNonMinimalDataPush(scriptHex: string): string | undefined {
-  const asm = Script.fromHex(scriptHex).toASM();
-  const parts = asm.split(" ");
-
-  for (const token of parts) {
-    if (!/^[0-9a-f]{2}$/i.test(token)) continue;
-    const value = Number.parseInt(token, 16);
-
-    if (value === 0 || (value >= 1 && value <= 16) || value === 0x81) {
-      return token.toLowerCase();
+  const bytes = Buffer.from(scriptHex, "hex");
+  let i = 0;
+  while (i < bytes.length) {
+    const op = bytes[i];
+    if (op >= 0x01 && op <= 0x4b) {
+      const len = op;
+      if (len === 1 && i + 1 < bytes.length) {
+        const v = bytes[i + 1];
+        if (v >= 1 && v <= 16)
+          return `push 1 0x${v.toString(16).padStart(2, "0")}`;
+        if (v === 0x81) return `push 1 0x81`;
+      }
+      i += 1 + len;
+      continue;
     }
+    if (op === 0x4c) {
+      const len = bytes[i + 1] ?? 0;
+      if (len < 0x4c) return `PUSHDATA1 ${len}`;
+      i += 2 + len;
+      continue;
+    }
+    if (op === 0x4d) {
+      const len = (bytes[i + 1] ?? 0) | ((bytes[i + 2] ?? 0) << 8);
+      if (len <= 0xff) return `PUSHDATA2 ${len}`;
+      i += 3 + len;
+      continue;
+    }
+    if (op === 0x4e) {
+      const len =
+        (bytes[i + 1] ?? 0) |
+        ((bytes[i + 2] ?? 0) << 8) |
+        ((bytes[i + 3] ?? 0) << 16) |
+        ((bytes[i + 4] ?? 0) << 24);
+      if (len <= 0xffff) return `PUSHDATA4 ${len}`;
+      i += 5 + len;
+      continue;
+    }
+    i++;
   }
-
-  return;
+  return undefined;
 }
 
 type NextContractState = {
@@ -313,6 +354,12 @@ export function daaModeToId(mode?: string): bigint {
   }
 }
 
+// Must match Photonic-Wallet packages/lib/src/script.ts MAX_TARGET.
+// MAX_TARGET = 0x7FFF_FFFF_FFFF_FFFF — the highest 8-byte LE positive script
+// number whose sign bit is clear; OP_NUM2BIN(8) in V3 PartC requires this.
+const MAX_TARGET = 0x7fffffffffffffffn;
+const MAX_TARGET_DIV4 = MAX_TARGET >> 2n; // 0x1FFF_FFFF_FFFF_FFFF — LWMA pre-cap
+
 export function computeAsertTarget(
   oldTarget: bigint,
   lastTime: bigint,
@@ -330,7 +377,12 @@ export function computeAsertTarget(
 
   let newTarget: bigint;
   if (drift > 0n) {
+    // Mirrors the on-chain 4×OP_2MUL unroll with per-step cap at MAX_TARGET.
+    // Once target reaches MAX_TARGET it's a fixed point — the bytecode caps
+    // pre-OP_2MUL via `min(target, MAX_TARGET/2)`, equivalent to capping the
+    // final result at MAX_TARGET.
     newTarget = oldTarget << drift;
+    if (newTarget > MAX_TARGET) newTarget = MAX_TARGET;
   } else if (drift < 0n) {
     newTarget = oldTarget >> (-drift);
   } else {
@@ -348,8 +400,22 @@ export function computeLinearTarget(
   currentTime: bigint,
   targetTime: bigint,
 ): bigint {
-  const timeDelta = currentTime - lastTime;
-  let newTarget = (oldTarget * timeDelta) / targetTime;
+  // Mirrors Photonic-Wallet buildLinearDaaBytecode() after the §S-CRIT-3 fix:
+  //   1. Cap timeDelta to 4 × targetTime  (matches ASERT drift range).
+  //   2. Cap target to MAX_TARGET/4       (keeps the OP_MUL within int64).
+  //   3. Divide-first: (target_capped / targetTime) × cappedDelta.
+  //   4. Final defensive MIN with MAX_TARGET.
+  // Without these caps the on-chain OP_MUL aborts at default difficulty
+  // (oldTarget ≈ MAX_TARGET/10) and broadcast fails OP_EQUALVERIFY.
+  let cappedDelta = currentTime - lastTime;
+  const deltaCap = 4n * targetTime;
+  if (cappedDelta > deltaCap) cappedDelta = deltaCap;
+
+  const targetCapped =
+    oldTarget > MAX_TARGET_DIV4 ? MAX_TARGET_DIV4 : oldTarget;
+
+  let newTarget = (targetCapped / targetTime) * cappedDelta;
+  if (newTarget > MAX_TARGET) newTarget = MAX_TARGET;
   if (newTarget < 1n) newTarget = 1n;
   return newTarget;
 }
@@ -395,6 +461,9 @@ export function computeEpochTarget(
 
   const n = maxAdjustmentLog2;
   const delta = currentTime - lastTime;
+  // On-chain (post §2.3 fix) computes `targetTime × 2^N` and `targetTime / 2^N`
+  // via N unrolled OP_2MUL/OP_2DIV. For positive operands bigint shift is
+  // numerically identical, so no code change is needed here.
   const upperBound = targetTime << n;
   const lowerBound = targetTime >> n;
 
@@ -403,6 +472,8 @@ export function computeEpochTarget(
   if (clampedDelta < lowerBound) clampedDelta = lowerBound;
 
   let newTarget = (oldTarget * clampedDelta) / targetTime;
+  // Mirror the defensive PUSH_MAX_TARGET OP_MIN added in the bytecode.
+  if (newTarget > MAX_TARGET) newTarget = MAX_TARGET;
   if (newTarget < 1n) newTarget = 1n;
   return newTarget;
 }
@@ -457,16 +528,22 @@ export function isV2Contract(contract: Contract): boolean {
 }
 
 /**
- * V3 dMint contracts are detected by their PartB4 shape: TOALTSTACK +
- * 4×OP_DROP (`6b75757575`) instead of V2's 5×OP_DROP (`7575757575`).
- * The TOALTSTACK byte (`6b`) is the canonical marker — preserves the
- * DAA-computed newTarget on the altstack so PartC can splice it into the
- * enforced next state. See b3t-forensics/v3-daa-propagation-design.md.
+ * Detect the post-2026-05-26 redesigned V2 (launch) dMint contract shape.
+ * Marker: PartB4 = `6b75757575` (TOALTSTACK + 4×DROP). Pre-redesign V2
+ * contracts (B3T2, K12T, DEEZ, apple — and the dead V3 VRT deploy) have
+ * different bytecode and would not parse as v2 via parseDmintScript anyway.
+ * Retained as a helper for code paths that already passed parsing (e.g.
+ * buildNextContractState) and need to confirm shape before branching.
  */
-export function isV3Contract(contract: Contract): boolean {
+export function isLaunchV2Contract(contract: Contract): boolean {
   if (!isV2Contract(contract) || !contract.codeScript) return false;
   return contract.codeScript.toLowerCase().includes("6b75757575");
 }
+
+/** @deprecated retained as an alias during the migration — points at the
+ *  same predicate as isLaunchV2Contract since the pre-redesign "V3" path is
+ *  gone. Will be removed once external callers are updated. */
+export const isV3Contract = isLaunchV2Contract;
 
 /**
  * Lower bound on the wallet balance (in photons/sats) needed to fund one
@@ -501,18 +578,25 @@ export function estimateMintBalanceFloorPhotons(contract: Contract): number {
   return estimatedFeePhotons + Number(contract.reward) + dustPhotons;
 }
 
+/**
+ * Build the next contract state script for the V2-launch shape.
+ *
+ * The on-chain PartC reconstructs `expected_next_state` from scratch as:
+ *   MINIMAL_PUSH(newHeight) || <middle_literal> || "04" || NUM2BIN(4, locktime) ||
+ *   MINIMAL_PUSH(newTarget_from_alt)
+ *
+ * where <middle_literal> is the deploy-time-baked blob containing items 2-8
+ * (cRef, tRef, mh, r, algoId, daaMode, targetTime — all unchanging across mints).
+ * The miner mirrors that emission exactly: same pushMinimal helper, same fixed
+ * lastTime width, with the unchanged middle pulled directly from the old state
+ * script via length-based slicing.
+ */
 export function buildNextContractState(
   contract: Contract,
   newHeight: bigint,
   txLockTime?: number,
 ): NextContractState {
-  // V3 contracts enforce a next state where height, lastTime, and target ALL
-  // update. PartC's `82 5e 94 7f 75` strips the old 14-byte tail (old lt +
-  // old target pushes) and PartC's TXLOCKTIME + FROMALTSTACK splices in the
-  // new lt and the DAA-computed newTarget. The miner must build the next
-  // state to match: same prefix + middle, but with the new height push at
-  // the front and `04 [newLt4] 08 [newTarget8]` at the tail.
-  if (isV3Contract(contract) && contract.codeScript) {
+  if (isLaunchV2Contract(contract) && contract.codeScript) {
     const currentTime = BigInt(txLockTime || Math.floor(Date.now() / 1000));
     const oldTarget = contract.target;
     const lastTime = contract.lastTime ?? currentTime;
@@ -559,21 +643,36 @@ export function buildNextContractState(
     }
     // fixed: newTarget = oldTarget (no change)
 
-    // Slice the old state script into prefix (height) + middle (everything
-    // between height and tail) + tail (lt + target). For V3 the tail is
-    // ALWAYS 14 bytes (5 for `04 [lt4]` + 9 for `08 [target8]`), so the old
-    // state hex ends at `script.length - 28` (in hex chars).
-    const oldStateHex = contract.script; // already hex
-    if (oldStateHex.length < 5 * 2 + 14 * 2) {
-      throw new Error("V3 contract state script unexpectedly short");
-    }
-    // Strip leading 5-byte height push (10 hex chars) and trailing 14-byte
-    // lt+tgt block (28 hex chars). What remains is the unchanged middle.
-    const middle = oldStateHex.substring(10, oldStateHex.length - 28);
-    const newHeightPush = push4bytes(Number(newHeight));
+    // The wallet emits stateScript = heightPush || middleLiteral || lastTimePush || targetPush
+    // where heightPush and targetPush are pushMinimal (variable width) and
+    // lastTimePush is push4bytes (fixed 5 bytes). The middle is unchanged
+    // across mints. We rebuild by slicing the OLD state script:
+    //   - skip leading heightPush (variable: 1 byte for OP_N/OP_0, else 1+L bytes)
+    //   - keep middleLiteral
+    //   - skip trailing lastTimePush (5 bytes) + targetPush (variable)
+    //
+    // Easier than parsing pushes: rebuild middleLiteral from the contract's
+    // already-parsed fields and re-emit.
+    const algoIdToHex: Record<string, number> = {
+      sha256d: 0,
+      blake3: 1,
+      k12: 2,
+    };
+    const algoId = algoIdToHex[contract.algorithm ?? "sha256d"] ?? 0;
+    const daaId = daaModeToId(contract.daaMode);
+    const middleLiteralHex = [
+      `d8${contract.contractRef}`,
+      `d0${contract.tokenRef}`,
+      pushMinimal(contract.maxHeight),
+      pushMinimal(contract.reward),
+      pushMinimal(BigInt(algoId)),
+      pushMinimal(daaId),
+      pushMinimal(targetTime),
+    ].join("");
+    const newHeightPush = pushMinimal(newHeight);
     const newLastTimePush = push4bytes(Number(currentTime));
-    const newTargetPush = pushTarget9Bytes(newTarget);
-    const nextStateScript = `${newHeightPush}${middle}${newLastTimePush}${newTargetPush}`;
+    const newTargetPush = pushMinimal(newTarget);
+    const nextStateScript = `${newHeightPush}${middleLiteralHex}${newLastTimePush}${newTargetPush}`;
 
     return {
       script: `${nextStateScript}bd${contract.codeScript}`,
@@ -582,17 +681,8 @@ export function buildNextContractState(
     };
   }
 
-  // V1 and pre-V3 V2: the deployed contract's PartC enforces
-  //   expected_next_state = push4(newHeight) || OP_STATESCRIPTBYTECODE_UTXO[5..]
-  // — i.e. only the height push (first 5 bytes) may change. Updating lastTime
-  // or target in the next state would trip OP_EQUALVERIFY at broadcast.
-  //
-  // (The V2 ASERT/LWMA/EPOCH/SCHEDULE DAA bytecode does compute a newTarget
-  // on the stack, but PartB4 drops it and PartC pins the next state to the
-  // old bytes. V3 contracts replace PartB4+PartC to actually propagate the
-  // DAA result; see the isV3Contract branch above.)
-  //
-  // Reference unused params so the function signature stays stable.
+  // V1 fallback: only the height push (first 5 bytes) may change; lastTime
+  // and target are pinned by V1 PartC's expected_next_state equation.
   void txLockTime;
   const nextStateScript = `${push4bytes(Number(newHeight))}${contract.script.substring(10)}`;
 
@@ -604,7 +694,6 @@ export function buildNextContractState(
     };
   }
 
-  // Legacy fallback for older parsed contracts without codeScript
   return {
     script: dMintScript({
       ...contract,

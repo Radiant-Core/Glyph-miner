@@ -56,7 +56,12 @@ function buildV2CodeScript(powOp: string): string {
 
 describe('dMint Token Structure', () => {
   describe('Contract Script Parsing', () => {
-    it('should parse SHA256d, Blake3, and K12 contract scripts', () => {
+    // These three tests target the pre-2026-05-26-redesign V2 contract shapes
+    // (5×DROP PartB4, fixed PartC constant). Those bytecode patterns are gone
+    // after the V2-launch unification — see
+    // b3t-forensics/V2_CONTRACT_AUDIT_REMEDIATION.md §§7-8. The pre-redesign
+    // V2 test deploys (B3T2, K12T, DEEZ, apple) are no longer parsed.
+    it.skip('should parse SHA256d, Blake3, and K12 contract scripts (legacy V2)', () => {
       const scripts = ['aa', 'ee', 'ef'].map((op) =>
         `${STATE_SCRIPT_PREFIX}${DMINT_CODE_SCRIPT_SUFFIX.replace('__OP__', op)}`
       );
@@ -66,7 +71,7 @@ describe('dMint Token Structure', () => {
       });
     });
 
-    it('should parse newer dynamic preimage codeScript variants from Photonic', () => {
+    it.skip('should parse newer dynamic preimage codeScript variants from Photonic (legacy V2)', () => {
       const scripts = ['aa', 'ee', 'ef'].map((op) =>
         `${STATE_SCRIPT_PREFIX}${DMINT_DYNAMIC_CODE_SCRIPT_SUFFIX.replace('__OP__', op)}`
       );
@@ -76,7 +81,7 @@ describe('dMint Token Structure', () => {
       });
     });
 
-    it('should parse V2 10-state-item contracts with new 5175c8 Part A prefix (no c0)', () => {
+    it.skip('should parse V2 10-state-item contracts with new 5175c8 Part A prefix (no c0)', () => {
       // V2 contracts created by the fixed Photonic Wallet omit OP_INPUTINDEX (c0).
       // The codeScript starts with 5175c8 instead of 5175c0c8.
       // parseDmintScript must detect these via the bd5175c8 separator.
