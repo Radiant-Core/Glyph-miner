@@ -260,8 +260,11 @@ export function burnScript(ref: string) {
   return `d8${ref}6a`;
 }
 
-// V1 Part B: PoW extraction + target comparison + output validation (no DAA)
-const V1_BYTECODE_PART_B =
+// V1 Part B: PoW extraction + target comparison + output validation (no DAA).
+// Exported so blockchain.ts can branch on V1-vs-V2 by codescript signature
+// (e.g. shouldIncludeOutputIndexInUnlockingScript needs to omit the OP_0
+// outputIndex push on V1 to avoid leaving the stack unclean).
+export const V1_BYTECODE_PART_B =
   "bc01147f77587f040000000088817600a269a269577ae500a069567ae600a06901d053797e0cdec0e9aa76e378e4a269e69d7eaa76e47b9d547a818b76537a9c537ade789181547ae6939d635279cd01d853797e016a7e886778de519d547854807ec0eb557f777e5379ec78885379eac0e9885379cc519d75686d7551";
 
 // V2 Part B.1: PoW hash extraction (shared)

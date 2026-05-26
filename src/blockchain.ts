@@ -78,6 +78,13 @@ enum ClaimError {
   MISSING_INPUTS,
   LOW_FEE,
   NON_MINIMAL_PUSH,
+  CLEAN_STACK,
+  PUSH_TOO_LARGE,
+  NOT_PUSHONLY,
+  // Any rejection (or sync exception) we don't have a dedicated bucket for.
+  // The raw message is surfaced in the Rejected UI so the user can see what
+  // the node actually said instead of nothing happening.
+  UNKNOWN,
 }
 
 type DmintPreimageStackCheck = {
@@ -230,23 +237,18 @@ function shouldIncludeOutputIndexInUnlockingScript(
   codeScriptHex?: string,
 ): boolean {
   void stateScriptHex;
-  if (!codeScriptHex) {
-    return true;
-  }
-
-  const asm = Script.fromHex(codeScriptHex).toASM();
-
-  const usesV2Preimage =
-    asm.includes("OP_OUTPOINTTXHASH OP_9 OP_PICK") &&
-    asm.includes("OP_13 OP_PICK OP_13 OP_PICK") &&
-    asm.includes("OP_14 OP_ROLL");
-
-  if (usesV2Preimage) {
-    return true;
-  }
-
-  // All V2 contracts include outputIndex in the unlocking stack
-  // (nonce, inputHash, outputHash, outputIndex) to satisfy indexed PICK/ROLL depths.
+  void codeScriptHex;
+  // V1 AND V2 dMint codescripts both expect a 4-item unlocking stack
+  // (nonce, inputHash, outputHash, outputIndex). Empirically:
+  //   - With 4 items, V1 spends succeed.
+  //   - With 3 items (the previous "V1 only uses 3" assumption), V1 rejects
+  //     with mandatory-script-verify-flag-failed (Operation not valid with
+  //     the current stack size) — the codescript's deep OP_PICK/OP_ROLL
+  //     indices underflow.
+  // The earlier appearance of "V1 doesn't broadcast" was actually the
+  // `process is not defined` ReferenceError from radiantjs blocking every
+  // tx.sign(); once the processShim landed and broadcasts started flowing,
+  // V1 worked with the same 4-item scriptSig as V2.
   return true;
 }
 
@@ -713,7 +715,7 @@ async function claimTokens(
     success: true;
     txid: string;
     nextContractState?: { target: bigint; lastTime?: bigint };
-  } | { success: false; error?: ClaimError }
+  } | { success: false; error?: ClaimError; message?: string }
 > {
   if (!wallet.value) return { success: false };
 
@@ -944,27 +946,44 @@ async function claimTokens(
   } catch (exception) {
     console.debug("Broadcast failed", exception);
 
-    const msg = ((exception as Error).message || "").toLowerCase();
-    let error = undefined;
+    const rawMessage = (exception as Error).message || "";
+    const msg = rawMessage.toLowerCase();
+    let error: ClaimError | undefined;
 
     if (msg.includes("missing inputs")) {
       error = ClaimError.MISSING_INPUTS;
-    }
-
-    if (
+    } else if (
       msg.includes("min relay fee not met") ||
       msg.includes("bad-txns-in-belowout")
     ) {
       error = ClaimError.LOW_FEE;
-    }
-    if (msg.includes("txn-mempool-conflict")) {
+    } else if (msg.includes("txn-mempool-conflict")) {
       error = ClaimError.MEMPOOL_CONFLICT;
-    }
-    if (msg.includes("mandatory-script-verify-flag-failed")) {
+    } else if (msg.includes("script did not clean stack")) {
+      // CLEANSTACK leaves extra items after script execution. For dMint this
+      // typically means the unlocking scriptSig has one too many pushes for
+      // what the codeScript expects (e.g. V1 with a trailing OP_0 outputIndex).
+      error = ClaimError.CLEAN_STACK;
+    } else if (msg.includes("data push larger than necessary")) {
+      // CheckMinimalPush rejection — caught at broadcast even if our local
+      // findNonMinimalDataPush pre-check missed it.
+      error = ClaimError.PUSH_TOO_LARGE;
+    } else if (msg.includes("scriptsig-not-pushonly")) {
+      error = ClaimError.NOT_PUSHONLY;
+    } else if (
+      // `mandatory-script-verify-flag-failed` is the strict bucket, but the
+      // node also returns `non-mandatory-script-verify-flag-failed` for the
+      // same class of contract-execution errors when the policy is relaxed.
+      // Both mean the same thing for us: the contract rejected the spend.
+      msg.includes("mandatory-script-verify-flag-failed") ||
+      msg.includes("non-mandatory-script-verify-flag-failed")
+    ) {
       error = ClaimError.CONTRACT_FAIL;
+    } else {
+      error = ClaimError.UNKNOWN;
     }
 
-    return { success: false, error };
+    return { success: false, error, message: rawMessage };
   }
 }
 
@@ -1211,7 +1230,23 @@ async function submit() {
 
   ready = false;
 
-  const result = await claimTokens(pendingContract, pendingWork, nonce);
+  // claimTokens does a lot of synchronous work BEFORE the broadcast try/catch
+  // (script building, tx.sign, etc). Any throw from that work would otherwise
+  // escape submit() as an unhandled rejection, leave `ready` stuck at false,
+  // and silently queue every subsequent nonce. Wrap the whole call so the
+  // user always sees a Rejected message with the raw error.
+  let result: Awaited<ReturnType<typeof claimTokens>>;
+  try {
+    result = await claimTokens(pendingContract, pendingWork, nonce);
+  } catch (exception) {
+    console.debug("claimTokens threw", exception);
+    result = {
+      success: false,
+      error: ClaimError.UNKNOWN,
+      message: (exception as Error).message || String(exception),
+    };
+  }
+
   if (result.success) {
     const { txid } = result;
     accepted.value++;
@@ -1268,7 +1303,10 @@ async function submit() {
     if (
       result.error === ClaimError.MISSING_INPUTS ||
       result.error === ClaimError.CONTRACT_FAIL ||
-      result.error === ClaimError.NON_MINIMAL_PUSH
+      result.error === ClaimError.NON_MINIMAL_PUSH ||
+      result.error === ClaimError.CLEAN_STACK ||
+      result.error === ClaimError.PUSH_TOO_LARGE ||
+      result.error === ClaimError.NOT_PUSHONLY
     ) {
       clearTimeout(subscriptionCheckTimer);
 
@@ -1284,6 +1322,12 @@ async function submit() {
         miner.stop();
         miningEnabled.value = false;
         addMessage({ type: "stop" });
+      } else if (result.error === ClaimError.CLEAN_STACK) {
+        rejectMessage("script did not clean stack");
+      } else if (result.error === ClaimError.PUSH_TOO_LARGE) {
+        rejectMessage("data push larger than necessary");
+      } else if (result.error === ClaimError.NOT_PUSHONLY) {
+        rejectMessage("scriptsig-not-pushonly");
       } else {
         console.debug("Contract fail context", {
           algorithm: pendingWork.algorithm,
@@ -1314,6 +1358,13 @@ async function submit() {
         // This timer will be cleared when contract subscription is received
         startContractCheckTimer(10000, true);
       }
+    } else {
+      // ClaimError.UNKNOWN, or no error code at all (e.g. wallet missing).
+      // Surface the raw exception message so users see *something* instead of
+      // silent rejects forever. Without this fallback, any unmatched broadcast
+      // error left `ready=true` but never showed a Rejected message and the
+      // user couldn't tell that submit had even run.
+      rejectMessage(result.message ?? "unknown error");
     }
 
     rejected.value++;

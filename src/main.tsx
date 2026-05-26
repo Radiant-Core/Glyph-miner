@@ -1,3 +1,10 @@
+// Side-effect import — MUST be first. Installs `globalThis.process` /
+// `globalThis.Buffer` shims that `@radiant-core/radiantjs` reads at module
+// init time. Without this, `tx.sign()` throws `ReferenceError: process is
+// not defined` from `getRandomBuffer`, the exception escapes claimTokens,
+// `ready` stays false, and every subsequent nonce is silently queued with
+// no Accepted/Rejected feedback.
+import "./processShim";
 import { createHashRouter, RouterProvider } from "react-router-dom";
 import { ChakraBaseProvider } from "@chakra-ui/react";
 import ReactDOM from "react-dom/client";

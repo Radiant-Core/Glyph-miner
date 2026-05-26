@@ -8,10 +8,12 @@
   </head>
   <body>
     <div id="root"></div>
-    <script type="module">
-      import { Buffer } from "buffer";
-      window.Buffer = Buffer;
-    </script>
+    <!--
+      Buffer / process shims for @radiant-core/radiantjs now live in
+      src/processShim.ts and are imported first from src/main.tsx. Keeping
+      them in a TS module (instead of an inline script) means the bundle
+      works under a `script-src 'self'` CSP if we ever adopt one.
+    -->
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
