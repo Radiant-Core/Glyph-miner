@@ -655,12 +655,23 @@ export function buildNextContractState(
     //
     // Easier than parsing pushes: rebuild middleLiteral from the contract's
     // already-parsed fields and re-emit.
+    // Prefer the numeric algoId the parser extracted from the state script
+    // (numbers[3] in parseContractTx for the V2 layout). contract.algorithm
+    // is a string field that's populated by the UI/work flow but NOT by
+    // parseContractTx — so reading it here returns undefined for a freshly-
+    // parsed contract, the algoId-string-lookup falls back to 0 (sha256d),
+    // and blake3/k12 V2 contracts emit a wrong middle-literal algoId byte.
+    // Use contract.algoId directly; only fall back to the algorithm string
+    // lookup when algoId is missing (V1 contracts have no algoId at all).
     const algoIdToHex: Record<string, number> = {
       sha256d: 0,
       blake3: 1,
       k12: 2,
     };
-    const algoId = algoIdToHex[contract.algorithm ?? "sha256d"] ?? 0;
+    const algoId =
+      contract.algoId !== undefined
+        ? Number(contract.algoId)
+        : algoIdToHex[contract.algorithm ?? "sha256d"] ?? 0;
     const daaId = daaModeToId(contract.daaMode);
     const middleLiteralHex = [
       `d8${contract.contractRef}`,
@@ -804,8 +815,18 @@ async function claimTokens(
   const privKey = wallet.value.privKey;
   const reward = Number(contract.reward);
 
-  // V2 DAA contracts require nLockTime for OP_TXLOCKTIME timestamp
-  const needsNLockTime = isV2Contract(contract) && contract.daaMode !== 'fixed';
+  // V2-launch PartC ELSE_BRANCH always reconstructs the next-state lastTime
+  // slot from OP_TXLOCKTIME (bytecode `c55480547c7e7e`, see Photonic-Wallet
+  // packages/lib/src/script.ts buildV2PartC), regardless of DAA mode. Even a
+  // fixed-DAA V2 mint will fail the expected_next_state OP_EQUALVERIFY if
+  // nLockTime stays at 0 while the miner-built next state embeds the wall-clock
+  // lastTime push. So nLockTime MUST be set for every V2-launch mint.
+  //
+  // Pre-2026-05-27, this was gated on `daaMode !== 'fixed'` on the assumption
+  // that fixed-DAA didn't read TXLOCKTIME. That was true for the pre-redesign
+  // V2 but not for the launch redesign — V1 keeps the old behavior
+  // (isLaunchV2Contract is false for V1, so txLockTime stays 0).
+  const needsNLockTime = isLaunchV2Contract(contract);
   const txLockTime = needsNLockTime ? Math.floor(Date.now() / 1000) : 0;
   if (txLockTime > 0) {
     (tx as any).nLockTime = txLockTime;

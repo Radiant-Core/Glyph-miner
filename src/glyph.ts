@@ -385,6 +385,161 @@ function mapDaaModeId(modeId: number): Contract["daaMode"] | undefined {
   }
 }
 
+/**
+ * Decode a single minimal push at `pos` in a hex string. Returns the decoded
+ * value as a BigInt and the position immediately after the push, or undefined
+ * if the bytes there are not a valid minimal push of a script number.
+ *
+ * Used to extract deploy-time DAA parameters baked into the codescript
+ * (e.g. ASERT's halfLife at `c552799453795379 94 <push> 96`), which the
+ * miner needs to mirror the on-chain DAA computation exactly. Without this,
+ * the miner uses defaults (3600 for halfLife) and the next-state target push
+ * diverges from what PartC reconstructs → state-script OP_EQUALVERIFY fails.
+ */
+function decodePushAt(hex: string, pos: number): { value: bigint; nextPos: number } | undefined {
+  if (pos >= hex.length) return undefined;
+  const op = parseInt(hex.slice(pos, pos + 2), 16);
+  if (Number.isNaN(op)) return undefined;
+
+  // OP_0 → 0
+  if (op === 0x00) return { value: 0n, nextPos: pos + 2 };
+  // OP_1NEGATE → -1
+  if (op === 0x4f) return { value: -1n, nextPos: pos + 2 };
+  // OP_1..OP_16 → 1..16
+  if (op >= 0x51 && op <= 0x60) return { value: BigInt(op - 0x50), nextPos: pos + 2 };
+  // Direct push of L bytes (1..75)
+  if (op >= 0x01 && op <= 0x4b) {
+    const dataHex = hex.slice(pos + 2, pos + 2 + op * 2);
+    if (dataHex.length !== op * 2) return undefined;
+    try {
+      const bytes = Buffer.from(dataHex, "hex");
+      // Decode as little-endian sign-magnitude script number.
+      let n = 0n;
+      const neg = (bytes[bytes.length - 1] & 0x80) !== 0;
+      for (let i = 0; i < bytes.length; i++) {
+        n |= BigInt(bytes[i]) << (8n * BigInt(i));
+      }
+      if (neg) {
+        const mask = ~(0x80n << (8n * BigInt(bytes.length - 1)));
+        n &= mask;
+        n = -n;
+      }
+      return { value: n, nextPos: pos + 2 + op * 2 };
+    } catch {
+      return undefined;
+    }
+  }
+  // PUSHDATA1 (0x4c) — supported, though DAA params should never need it.
+  if (op === 0x4c) {
+    const len = parseInt(hex.slice(pos + 2, pos + 4), 16);
+    if (Number.isNaN(len)) return undefined;
+    const dataHex = hex.slice(pos + 4, pos + 4 + len * 2);
+    if (dataHex.length !== len * 2) return undefined;
+    const bytes = Buffer.from(dataHex, "hex");
+    let n = 0n;
+    const neg = (bytes[bytes.length - 1] & 0x80) !== 0;
+    for (let i = 0; i < bytes.length; i++) {
+      n |= BigInt(bytes[i]) << (8n * BigInt(i));
+    }
+    if (neg) {
+      const mask = ~(0x80n << (8n * BigInt(bytes.length - 1)));
+      n &= mask;
+      n = -n;
+    }
+    return { value: n, nextPos: pos + 4 + len * 2 };
+  }
+  return undefined;
+}
+
+/**
+ * Extract the DAA-mode-specific parameters that the wallet baked into the
+ * codescript at deploy time. Mirrors the bytecode emitted by Photonic-Wallet
+ * `buildAsertDaaBytecode` / `buildEpochDaaBytecode` etc., reading back the
+ * exact constants the on-chain DAA will use during the spend.
+ *
+ * Returns the params object the miner should put on `contract.daaParams` so
+ * that `computeAsertTarget` / `computeEpochTarget` produce a newTarget byte-
+ * identical to what PartC reconstructs from `OP_FROMALTSTACK + MINIMAL_PUSH`.
+ *
+ * Pre-2026-05-27 the miner left `daaParams = undefined`, falling back to the
+ * library defaults (halfLife=3600 for ASERT). Any contract deployed with a
+ * non-default halfLife would emit a mismatched next-state target push and
+ * fail the PartC state-script OP_EQUALVERIFY. See bug #4 of the V2-launch
+ * remediation.
+ */
+function extractDaaParamsFromCodeScript(
+  codeScript: string,
+  daaMode: Contract["daaMode"],
+): Record<string, unknown> | undefined {
+  if (!daaMode || daaMode === "fixed") return undefined;
+  const lower = codeScript.toLowerCase();
+
+  if (daaMode === "asert") {
+    // ASERT prefix: c5 5279 94 5379 94 <halfLifePush> 96 (DIV)
+    //   c5      OP_TXLOCKTIME
+    //   5279    OP_2 OP_PICK     → lastTime
+    //   94      OP_SUB            → timeDelta
+    //   5379    OP_3 OP_PICK     → targetTime
+    //   94      OP_SUB            → excess
+    //   <push>  halfLife
+    //   96      OP_DIV            → drift
+    // 7-byte prefix, 14 hex chars.
+    const prefix = "c5" + "5279" + "94" + "5379" + "94";
+    const idx = lower.indexOf(prefix);
+    if (idx < 0) return undefined;
+    const pushStart = idx + prefix.length;
+    const decoded = decodePushAt(lower, pushStart);
+    if (!decoded) return undefined;
+    // Sanity: the byte immediately after the push must be OP_DIV (0x96).
+    if (lower.slice(decoded.nextPos, decoded.nextPos + 2) !== "96") {
+      return undefined;
+    }
+    if (decoded.value <= 0n) return undefined;
+    return { halfLife: Number(decoded.value) };
+  }
+
+  if (daaMode === "lwma") {
+    // LWMA has no deploy-time constants beyond targetTime, which already
+    // lives in the state script. Nothing to extract.
+    return undefined;
+  }
+
+  if (daaMode === "epoch") {
+    // EPOCH prefix from buildEpochDaaBytecode:
+    //   5979 <epochLengthPush> 97 (MOD) ... then later N×OP_2MUL (8d) for shift.
+    // We only need epochLength + maxAdjustmentLog2 for the miner's computation.
+    const epochPrefix = "5979"; // OP_9 OP_PICK height
+    const idx = lower.indexOf(epochPrefix);
+    if (idx < 0) return undefined;
+    const epochLenStart = idx + epochPrefix.length;
+    const epochLen = decodePushAt(lower, epochLenStart);
+    if (!epochLen) return undefined;
+    if (lower.slice(epochLen.nextPos, epochLen.nextPos + 2) !== "97") return undefined;
+    if (epochLen.value <= 0n) return undefined;
+    // maxAdjustmentLog2 = count of 0x8d (OP_2MUL) in the epoch block. The
+    // bytecode emits exactly N copies for the upper-clamp shift.
+    const epochBody = lower.slice(epochLen.nextPos);
+    // Count contiguous 8d runs — only the upper-clamp uses 8d, so the count
+    // equals N. (Lower-clamp uses 0x8e OP_2DIV.)
+    const mulMatches = epochBody.match(/8d/g) ?? [];
+    const log2 = mulMatches.length > 0 && mulMatches.length <= 4 ? mulMatches.length : 2;
+    return {
+      epochLength: Number(epochLen.value),
+      maxAdjustmentLog2: log2,
+    };
+  }
+
+  if (daaMode === "schedule") {
+    // SCHEDULE bytecode is a nested IF/ELSE chain. Reconstructing the full
+    // schedule from bytecode is doable but non-trivial; leave as a TODO.
+    // For now the miner falls back to oldTarget for SCHEDULE if the schedule
+    // is unknown — which matches the bytecode's "no boundary crossed" branch.
+    return undefined;
+  }
+
+  return undefined;
+}
+
 export function parseBurnScript(script: string): string {
   const pattern = /^d8([0-9a-f]{64}[0-9]{8})6a$/;
   const [, ref] = script.match(pattern) || [];
@@ -468,7 +623,7 @@ export async function parseContractTx(tx: Transaction, ref: string) {
       let lastTime: bigint | undefined;
       let targetTime: bigint | undefined;
       let daaMode: Contract["daaMode"];
-      let daaParams: bigint[] | undefined;
+      let daaParams: Record<string, unknown> | undefined;
 
       // Detect V2 format: 8+ numeric items where items[3]=algoId(0-4) and [4]=daaMode(0-4)
       const isV2 = numbers.length >= 8 &&
@@ -485,6 +640,13 @@ export async function parseContractTx(tx: Transaction, ref: string) {
         targetTime = numbers[5];
         lastTime = numbers[6];
         target = numbers[7];
+        // Extract deploy-time DAA params from the codescript so the miner's
+        // local DAA computation matches the on-chain bytecode exactly. See
+        // extractDaaParamsFromCodeScript above. Without this the miner falls
+        // back to library defaults (halfLife=3600 for ASERT, epochLength=2016
+        // for EPOCH) and any non-default deploy produces a wrong newTarget
+        // → state-script OP_EQUALVERIFY fails on the spend.
+        daaParams = extractDaaParamsFromCodeScript(codeScript, daaMode);
       } else {
         // V1 layout: height, maxHeight, reward, target
         height = numbers[0];
