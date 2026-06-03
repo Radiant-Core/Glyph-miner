@@ -84,7 +84,7 @@ export default function Settings() {
     mineToAddress: mineToAddress.value,
     mintMessage: mintMessage.value,
     hideMessages: hideMessages.value ? "1" : "",
-    autoReseed: autoReseed.value ? "1" : "",
+    autoReseed: autoReseed.value ? "1" : "0",
     servers: servers.value.join("\n"),
     contractsUrl: contractsUrl.value,
     restApiUrl: restApiUrl.value,

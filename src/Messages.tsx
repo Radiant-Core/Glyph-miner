@@ -146,7 +146,9 @@ export default function Messages() {
               </>
             )}
             {m.type === "start" && <>Mining started</>}
-            {m.type === "stop" && <>Mining stopped</>}
+            {m.type === "stop" && (
+              <>Mining stopped{m.reason ? <> — {m.reason}</> : null}</>
+            )}
           </Box>
         </Line>
       ))}

@@ -202,6 +202,14 @@ export type Message = {
       seconds: number;
     }
   | {
-      type: "start" | "stop";
+      type: "start";
+    }
+  | {
+      type: "stop";
+      // Optional human-readable reason. When present, the Messages UI
+      // renders it as "Mining stopped — {reason}" so the user knows why
+      // the miner halted (nonce exhaustion, GPU error, algo mismatch,
+      // etc.) instead of seeing the Start button silently toggle back on.
+      reason?: string;
     }
 );
