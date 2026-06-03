@@ -45,24 +45,49 @@ contractsUrl.value =
 useIndexerApi.value = localStorage.getItem("useIndexerApi") !== "";
 // Load RXinDexer REST API URL
 restApiUrl.value = localStorage.getItem("restApiUrl") || "https://glyph-miner.com/api";
-// Default to enabled unless explicitly disabled
-autoReseed.value = localStorage.getItem("autoReseed") !== "";
 
-// If servers isn't saved then set to default servers, randomly sorted
-// Also ensure any new default servers are added to stored list
+// autoReseed default: ON. Honor an explicit "0" to disable; treat anything
+// else (including missing / legacy empty string) as enabled. The previous
+// check (`!== ""`) inverted the convention so writing "0" silently failed
+// to disable — kept as a fallback for legacy stored values.
+{
+  const stored = localStorage.getItem("autoReseed");
+  if (stored === null) {
+    autoReseed.value = true;
+  } else if (stored === "0") {
+    autoReseed.value = false;
+  } else if (stored === "") {
+    // Legacy form written by the old Settings UI; treat as disabled.
+    autoReseed.value = false;
+  } else {
+    autoReseed.value = true;
+  }
+}
+
+// If servers isn't saved then set to default servers in canonical order.
+//
+// On first run we seed the user's stored list with the defaults. On
+// subsequent runs we respect the stored list as-is — we do NOT silently
+// merge in any new defaults that the user previously removed, because that
+// makes "remove server" stick for one session and reappear on the next.
+// Users who want refreshed defaults can clear the entry from Settings or
+// localStorage.
 const storedServers = localStorage.getItem("servers");
 if (storedServers) {
-  const parsed: string[] = JSON.parse(storedServers);
-  const missing = defaultServers.filter((s) => !parsed.includes(s));
-  if (missing.length > 0) {
-    parsed.push(...missing);
-    localStorage.setItem("servers", JSON.stringify(parsed));
+  try {
+    const parsed: string[] = JSON.parse(storedServers);
+    servers.value = Array.isArray(parsed) && parsed.length > 0
+      ? parsed
+      : defaultServers.slice();
+  } catch {
+    // Corrupt JSON in storage — fall back to defaults rather than crash.
+    servers.value = defaultServers.slice();
   }
-  servers.value = parsed;
 } else {
   // Deterministic order — first entries are Radiant Core nodes that
   // accept V2 BLAKE3/K12 dMint contracts. See defaultServers comment.
   servers.value = defaultServers.slice();
+  localStorage.setItem("servers", JSON.stringify(servers.value));
 }
 
 connect();
