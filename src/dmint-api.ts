@@ -417,7 +417,10 @@ export async function fetchContractsSimple(): Promise<[string, number][]> {
  */
 export async function fetchContractsExtended(): Promise<ExtendedContractsResponse | null> {
   // Try REST API first
-  const restContracts = await fetchFromRestApi("/dmint/contracts?version=2&limit=5000&include_icon_data=true");
+  // Don't inline icon hex in the list — it bloats the payload massively. The
+  // indexer instead returns an icon URL (the lazy /dmint/contracts/{ref}/icon
+  // route) that the browser fetches and caches per-token on render.
+  const restContracts = await fetchFromRestApi("/dmint/contracts?version=2&limit=5000");
   if (restContracts && restContracts.length > 0) {
     const mapped = restContracts.map(mapRestContract);
     indexExtendedContracts(mapped);
