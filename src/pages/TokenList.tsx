@@ -10,7 +10,7 @@ import { SearchIcon, TriangleDownIcon, TriangleUpIcon, CloseIcon } from "@chakra
 import { LuRefreshCw } from "react-icons/lu";
 import { Link, useNavigate } from "react-router-dom";
 import { deriveSubContractRefCandidates } from "../utils";
-import { miningEnabled, miningStatus, selectedContract } from "../signals";
+import { miningEnabled, miningStatus, selectedContract, restApiUrl } from "../signals";
 import miner from "../miner";
 import { addMessage } from "../message";
 import {
@@ -52,6 +52,12 @@ function resolveIconUrl(url?: string): string | undefined {
     const cid = url.replace("ipfs://", "");
     return `https://ipfs.io/ipfs/${cid}`;
   }
+  // Server-relative icon routes (e.g. /dmint/contracts/{ref}/icon) resolve
+  // against the REST API origin, not the app origin.
+  if (url.startsWith("/")) {
+    const base = (restApiUrl.value || "").replace(/\/$/, "");
+    return base ? `${base}${url}` : url;
+  }
   return url;
 }
 
@@ -78,6 +84,7 @@ function TokenIcon({ iconType, iconData, iconUrl }: {
       boxSize="24px"
       borderRadius="full"
       objectFit="cover"
+      loading="lazy"
       onError={() => setError(true)}
     />
   );
