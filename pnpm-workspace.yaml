@@ -9,5 +9,6 @@ minimumReleaseAgeExclude:
   # pruned once they're well past the window — no point listing exclusions
   # the policy already accepts on its own.
   - '@radiant-core/radiantjs@2.0.5'
+  - '@radiant-core/radiantjs@2.0.6'
 patchedDependencies:
   ws-electrumx-client@1.0.5: patches/ws-electrumx-client@1.0.5.patch

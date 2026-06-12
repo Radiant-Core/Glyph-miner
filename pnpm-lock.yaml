@@ -48,8 +48,8 @@ importers:
         specifier: ^0.4.0
         version: 0.4.0(@babel/core@7.29.0)(react@18.3.1)
       '@radiant-core/radiantjs':
-        specifier: ^2.0.5
-        version: 2.0.5
+        specifier: ^2.0.6
+        version: 2.0.6
       '@scure/bip32':
         specifier: ^1.5.0
         version: 1.7.0
@@ -670,8 +670,8 @@ packages:
     peerDependencies:
       react: ^16.14.0 || 17.x || 18.x || 19.x
 
-  '@radiant-core/radiantjs@2.0.5':
-    resolution: {integrity: sha512-ilKZ4fhwIUeGdSXnlaRa5gGB4GvGX04xpEXNfJbQTfIqfoLej0Yxwp8JfPBmsH0LFWMPXqLinlCVoPqhsB+EXQ==}
+  '@radiant-core/radiantjs@2.0.6':
+    resolution: {integrity: sha512-dwXi4SOYRm8wnbxla6+q6VOYxllQvw7hw6EU/oiBdL6GeQPbt6TPnodBDg2R8vGZQMEEkoPNISXvBCwU4ikURQ==}
 
   '@remix-run/router@1.23.2':
     resolution: {integrity: sha512-Ic6m2U/rMjTkhERIa/0ZtXJP17QUi2CbWE7cqx4J58M8aA3QTfW+2UlQ4psvTX9IO1RfNVhK3pcpdjej7L+t2w==}
@@ -3013,7 +3013,7 @@ snapshots:
       react: 18.3.1
       use-sync-external-store: 1.6.0(react@18.3.1)
 
-  '@radiant-core/radiantjs@2.0.5':
+  '@radiant-core/radiantjs@2.0.6':
     dependencies:
       '@noble/hashes': 1.8.0
       '@noble/secp256k1': 3.1.0
