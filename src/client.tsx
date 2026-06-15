@@ -38,15 +38,17 @@ function startAutoReconnectTimer() {
     const allServersAttempted =
       connectAttemptCounter > 0 &&
       connectAttemptCounter % servers.value.length === 0;
-    autoReconnectTimer = setTimeout(
-      () => {
-        // Try the next server
-        serverNum = (serverNum + 1) % servers.value.length;
-        console.debug("Attempting to reconnect");
-        connect();
-      },
-      allServersAttempted ? 120000 : 10000
-    );
+    // Jitter the reconnect (±25%) so a fleet of miners that all lost the same
+    // server don't reconnect in lockstep and hammer the indexer the instant it
+    // comes back — the same thundering-herd that pinned the public indexer.
+    const baseDelay = allServersAttempted ? 120000 : 10000;
+    const delay = Math.round(baseDelay * (0.75 + Math.random() * 0.5));
+    autoReconnectTimer = setTimeout(() => {
+      // Try the next server
+      serverNum = (serverNum + 1) % servers.value.length;
+      console.debug("Attempting to reconnect");
+      connect();
+    }, delay);
   }
 }
 
