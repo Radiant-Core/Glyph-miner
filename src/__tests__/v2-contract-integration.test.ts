@@ -1596,6 +1596,42 @@ describe('V2-launch contract (post-2026-05-26 redesign)', () => {
     expect(findNonMinimalDataPush(stateScript)).toBeUndefined();
   });
 
+  it('findNonMinimalDataPush skips OP_PUSHINPUTREF 36-byte operands (regression: deploy txid starting 0x4d)', () => {
+    // Real token 4d862e5d…d94: its little-endian contract-ref operand ends
+    // `…5d 2e 86 4d` followed by output index `01 00 00 00`, i.e. the byte run
+    // `4d 01 00`. A walker that doesn't skip the OP_PUSHINPUTREF-family 36-byte
+    // immediate reads it as a bogus OP_PUSHDATA2 len=1. radiantd's GetScriptOp
+    // skips the operand (pc += 36), so the contract is minimal and mineable.
+    const leTxid = Buffer.from(
+      '4d862e5dfce832faf2d1b0f5565bef93e9f79d0eaff9bcf86fb0415bf7571d94',
+      'hex',
+    ).reverse().toString('hex');
+    const stateScript =
+      '00' +
+      'd8' + leTxid + '01000000' +   // contractRef (output 1) → `4d 01 00`
+      'd0' + leTxid + '02000000' +   // tokenRef    (output 2) → `4d 02 00`
+      '55' + '51' + '00' + '00' + '013c' +
+      push4bytes(1700000000) +
+      '08ffffffffffffff7f';
+    expect(findNonMinimalDataPush(stateScript)).toBeUndefined();
+  });
+
+  it('findNonMinimalDataPush keeps alignment after a ref operand (still catches a real violation that follows it)', () => {
+    // Guards against over-skipping: a genuine `01 04` placed right after the two
+    // ref operands must still be detected, proving the 36-byte skip lands exactly
+    // on the next real opcode rather than swallowing it.
+    const leTxid = Buffer.from(
+      '4d862e5dfce832faf2d1b0f5565bef93e9f79d0eaff9bcf86fb0415bf7571d94',
+      'hex',
+    ).reverse().toString('hex');
+    const stateScript =
+      '00' +
+      'd8' + leTxid + '01000000' +
+      'd0' + leTxid + '02000000' +
+      '0104';                        // real non-minimal push (should be OP_4)
+    expect(findNonMinimalDataPush(stateScript)).toBe('push 1 0x04');
+  });
+
   it('findNonMinimalDataPush still catches `01 04` (real MINIMALDATA violation)', () => {
     // `01 04` = push 1 byte 0x04. data=[0x04], data[0]∈[1..16] → should be OP_4.
     expect(findNonMinimalDataPush('0104')).toBe('push 1 0x04');

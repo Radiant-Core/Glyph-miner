@@ -298,6 +298,28 @@ export function findNonMinimalDataPush(scriptHex: string): string | undefined {
   let i = 0;
   while (i < bytes.length) {
     const op = bytes[i];
+    // Radiant ref-carrying opcodes embed a 36-byte immediate operand (the input
+    // ref) directly in the script. radiantd's GetScriptOp (Radiant-Core
+    // src/script/script.cpp ~662) advances the program counter past it via
+    // `pc += 36`, so CheckMinimalPush never inspects those bytes. We must skip
+    // them too — otherwise a ref whose bytes happen to contain e.g. `4d 01 00`
+    // (a deploy txid starting 0x4d → little-endian ref tail `…86 4d` + output
+    // index `01 00 00 00`) is mis-read as a non-minimal OP_PUSHDATA2, wrongly
+    // blocking a perfectly minimal, mineable contract. Opcode set matches
+    // GetScriptOp exactly: OP_PUSHINPUTREF (0xd0), OP_REQUIREINPUTREF (0xd1),
+    // OP_DISALLOWPUSHINPUTREF (0xd2), OP_DISALLOWPUSHINPUTREFSIBLING (0xd3),
+    // OP_PUSHINPUTREFSINGLETON (0xd8). The other 0xd4–0xd7/0xd9 ref opcodes take
+    // no immediate, so they fall through to the single-byte-opcode path below.
+    if (
+      op === 0xd0 ||
+      op === 0xd1 ||
+      op === 0xd2 ||
+      op === 0xd3 ||
+      op === 0xd8
+    ) {
+      i += 1 + 36;
+      continue;
+    }
     if (op >= 0x01 && op <= 0x4b) {
       const len = op;
       if (len === 1 && i + 1 < bytes.length) {
