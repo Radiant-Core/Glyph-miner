@@ -102,11 +102,13 @@ export const MAX_PENDING_MINTS = 20;
 export const STALE_REJECT_RECOVER = 3;
 export const STALE_REJECT_STOP = 6;
 
-function resetMintProgress(contractRef: string) {
+function resetMintProgress(contractRef: string, confirmedHeight: bigint = -1n) {
   if (progressContractRef !== contractRef) {
     progressContractRef = contractRef;
     highestBroadcastHeight = -1n;
-    lastResolvedHeight = -1n;
+    // Seed from the loaded contract's confirmed height so the pending-mint
+    // throttle doesn't count already-confirmed mints as unconfirmed.
+    lastResolvedHeight = confirmedHeight;
     consecutiveStaleRejections = 0;
     broadcastHeights = new Map();
   }
@@ -1612,7 +1614,7 @@ export async function changeToken(ref: string) {
   // For the SAME contract (e.g. recoverFromError re-loading after a rejection)
   // the trackers are preserved so the stale-rejection counter can escalate to
   // a stop instead of resetting every recovery cycle.
-  resetMintProgress(token.contract.contractRef);
+  resetMintProgress(token.contract.contractRef, token.contract.height);
   glyph.value = token.glyph;
   updateWork();
 
