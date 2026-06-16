@@ -69,8 +69,107 @@ let ready: boolean = true;
 // Sometimes subscriptions arrive late after another nonce is found so keep track of previous locations
 let acceptedLocations: string[] = [];
 
-// Keep track of consecutive mempool conflicts
-let mempoolConflictCounter = 0;
+// --- Mint-progress hardening -------------------------------------------------
+// The miner advances its contract location optimistically (mint N+1 spends
+// mint N's outputs before mint N confirms). That works while mints confirm,
+// but breaks badly when they don't: `blockchain.ref.get` is a CONFIRMED-only
+// resolver, so if nothing confirms it keeps returning the genesis location.
+// The miner then re-pins to genesis (height 0), re-mines at trivial difficulty,
+// and floods the mempool with mutually-conflicting genesis-spends — surfacing
+// as endless "Missing inputs" / "txn-mempool-conflict" rejections.
+//
+// These trackers (reset per contract via resetMintProgress) let the miner:
+//   1. cap the unconfirmed optimistic chain (stay under the node's ~25-deep
+//      mempool ancestor/descendant limit and stop flooding), and
+//   2. refuse to REGRESS its location to a stale (e.g. genesis) tip, and
+//   3. stop — instead of looping — after repeated no-progress rejections.
+let progressContractRef = "";
+let highestBroadcastHeight = -1n; // highest height we've optimistically broadcast for the current contract
+let lastResolvedHeight = -1n; // highest height the indexer has resolved (confirmed) as the contract's location
+let consecutiveStaleRejections = 0; // missing-input/conflict rejections since the last successful broadcast
+// txid -> height of the mints we've broadcast, so that when ref.get's
+// confirmed-only resolver catches up to one of OUR broadcasts we can advance
+// lastResolvedHeight (in solo mining the confirmed tip is always our own txid,
+// which would otherwise be treated as an "old location" and never counted).
+let broadcastHeights = new Map<string, bigint>();
+
+// Pause once this many mints are awaiting confirmation. Kept below the node's
+// default -limitancestorcount / -limitdescendantcount of 25 so the chain never
+// trips "too-long-mempool-chain".
+export const MAX_PENDING_MINTS = 20;
+// Escalation thresholds for stale-input rejections: re-resolve the tip at
+// RECOVER, hard-stop at STOP.
+export const STALE_REJECT_RECOVER = 3;
+export const STALE_REJECT_STOP = 6;
+
+function resetMintProgress(contractRef: string) {
+  if (progressContractRef !== contractRef) {
+    progressContractRef = contractRef;
+    highestBroadcastHeight = -1n;
+    lastResolvedHeight = -1n;
+    consecutiveStaleRejections = 0;
+    broadcastHeights = new Map();
+  }
+}
+
+/**
+ * Advance lastResolvedHeight when the indexer's confirmed tip (`location`)
+ * matches a mint we broadcast — i.e. the chain has confirmed up to that height.
+ * Returns the (possibly unchanged) lastResolved value so the logic is testable.
+ */
+export function resolvedHeightFromConfirmedTip(
+  location: string | undefined,
+  broadcast: Map<string, bigint>,
+  lastResolved: bigint,
+): bigint {
+  if (!location) return lastResolved;
+  const h = broadcast.get(location);
+  return h !== undefined && h > lastResolved ? h : lastResolved;
+}
+
+/**
+ * Number of mints we've optimistically broadcast that the indexer has not yet
+ * resolved as confirmed. Used to throttle the unconfirmed chain.
+ */
+export function pendingMintCount(
+  highestBroadcast: bigint,
+  lastResolved: bigint,
+): bigint {
+  const resolved = lastResolved < 0n ? 0n : lastResolved;
+  const pending = highestBroadcast - resolved;
+  return pending > 0n ? pending : 0n;
+}
+
+/**
+ * Decide how to respond to a stale-input rejection (missing-inputs or
+ * mempool-conflict). Escalates: a soft re-check first (let a subscription
+ * update arrive), then re-resolve the tip, then stop so we don't loop forever
+ * when the chain simply isn't confirming. Missing-inputs always needs a
+ * re-resolve (the spent output is gone), so it skips the soft step.
+ */
+export function staleRejectionAction(
+  count: number,
+  isMissingInputs: boolean,
+  recoverAt: number = STALE_REJECT_RECOVER,
+  stopAt: number = STALE_REJECT_STOP,
+): "soft" | "recover" | "stop" {
+  if (count >= stopAt) return "stop";
+  if (isMissingInputs || count >= recoverAt) return "recover";
+  return "soft";
+}
+
+/**
+ * True when a freshly-resolved location would REGRESS the contract below a
+ * height we've already broadcast — i.e. the indexer is behind (e.g. returning
+ * the genesis location while our mints sit unconfirmed). Re-pinning to it would
+ * re-mine already-spent/conflicted outputs, so callers must not regress.
+ */
+export function isStaleRegression(
+  resolvedHeight: bigint,
+  highestBroadcast: bigint,
+): boolean {
+  return highestBroadcast >= 0n && resolvedHeight < highestBroadcast;
+}
 
 enum ClaimError {
   MEMPOOL_CONFLICT,
@@ -1293,7 +1392,7 @@ async function submit() {
   if (result.success) {
     const { txid } = result;
     accepted.value++;
-    mempoolConflictCounter = 0;
+    consecutiveStaleRejections = 0;
     ready = true;
     addMessage({
       type: "accept",
@@ -1321,6 +1420,31 @@ async function submit() {
         lastTime: result.nextContractState?.lastTime ?? pendingContract.lastTime,
       };
       miningStatus.value = "change";
+
+      // Track optimistic-chain progress and throttle it. If we've broadcast
+      // many mints the chain hasn't confirmed (lastResolvedHeight is advanced
+      // from the confirmed-only ref.get in updateContract), pause rather than
+      // keep stacking mints — both to stay under the node's mempool
+      // ancestor/descendant limit and to avoid flooding when the network isn't
+      // including these spends. (Skipped on the final mint above, which hands
+      // off to mintedOut's sub-contract auto-switch.)
+      if (height > highestBroadcastHeight) highestBroadcastHeight = height;
+      broadcastHeights.set(txid, height);
+      // Bound the map: oldest entries are the lowest (already-confirmed)
+      // heights we no longer need once lastResolvedHeight has passed them.
+      if (broadcastHeights.size > 256) {
+        broadcastHeights.delete(broadcastHeights.keys().next().value as string);
+      }
+      const pending = pendingMintCount(highestBroadcastHeight, lastResolvedHeight);
+      if (pending >= BigInt(MAX_PENDING_MINTS)) {
+        miner.stop();
+        miningEnabled.value = false;
+        addMessage({
+          type: "stop",
+          reason: `${pending} mints are awaiting confirmation — pausing so the unconfirmed chain stays under node mempool limits. If they aren't confirming, the network may not be including these spends. Reload the token to re-check.`,
+        });
+        return;
+      }
     }
 
     const floor = estimateMintBalanceFloorPhotons(pendingContract);
@@ -1345,6 +1469,39 @@ async function submit() {
 
     if (
       result.error === ClaimError.MISSING_INPUTS ||
+      result.error === ClaimError.MEMPOOL_CONFLICT
+    ) {
+      // Stale-input rejections: the contract/funding output we spent is gone
+      // (missing-inputs) or already spent by another mempool tx
+      // (mempool-conflict). Both occur when our optimistic location is stale or
+      // an earlier mint hasn't confirmed. We re-resolve the tip and retry, but
+      // if it keeps happening WITHOUT the contract advancing, the chain isn't
+      // confirming (e.g. the network isn't including these spends) — so stop
+      // instead of looping recovery and flooding the mempool with conflicts.
+      clearTimeout(subscriptionCheckTimer);
+      const isMissing = result.error === ClaimError.MISSING_INPUTS;
+      consecutiveStaleRejections++;
+      rejectMessage(isMissing ? "missing inputs" : "mempool conflict");
+
+      const action = staleRejectionAction(consecutiveStaleRejections, isMissing);
+      if (action === "stop") {
+        miner.stop();
+        miningEnabled.value = false;
+        addMessage({
+          type: "stop",
+          reason: `${consecutiveStaleRejections} consecutive ${
+            isMissing ? "missing-input" : "mempool-conflict"
+          } rejections without the contract advancing — the mint chain may not be confirming into blocks. Mining paused; reload the token to retry.`,
+        });
+        consecutiveStaleRejections = 0;
+      } else if (action === "recover") {
+        recoverFromError();
+      } else {
+        // Soft: wait briefly for a contract subscription update before
+        // re-resolving. Cleared when a subscription arrives.
+        startContractCheckTimer(10000, true);
+      }
+    } else if (
       result.error === ClaimError.CONTRACT_FAIL ||
       result.error === ClaimError.NON_MINIMAL_PUSH ||
       result.error === ClaimError.CLEAN_STACK ||
@@ -1353,10 +1510,7 @@ async function submit() {
     ) {
       clearTimeout(subscriptionCheckTimer);
 
-      if (result.error === ClaimError.MISSING_INPUTS) {
-        // This should be caught by subscription and subscriptionCheckTimer, but handle here in case
-        rejectMessage("missing inputs");
-      } else if (result.error === ClaimError.NON_MINIMAL_PUSH) {
+      if (result.error === ClaimError.NON_MINIMAL_PUSH) {
         rejectMessage("contract uses non-minimal pushdata");
         addMessage({
           type: "general",
@@ -1389,18 +1543,6 @@ async function submit() {
       miner.stop();
       miningEnabled.value = false;
       addMessage({ type: "stop" });
-    } else if (result.error == ClaimError.MEMPOOL_CONFLICT) {
-      rejectMessage("mempool conflict");
-      mempoolConflictCounter++;
-
-      // If there are consecutive mempool conflicts, then refetch and resubscribe to everything again
-      if (mempoolConflictCounter === 3) {
-        recoverFromError();
-      } else {
-        // If no subscription is received within the next 10 seconds, refetch
-        // This timer will be cleared when contract subscription is received
-        startContractCheckTimer(10000, true);
-      }
     } else {
       // ClaimError.UNKNOWN, or no error code at all (e.g. wallet missing).
       // Surface the raw exception message so users see *something* instead of
@@ -1466,6 +1608,11 @@ export async function changeToken(ref: string) {
   contract.value = algorithm
     ? { ...token.contract, algorithm }
     : { ...token.contract };
+  // Reset optimistic-mint progress when switching to a different contract.
+  // For the SAME contract (e.g. recoverFromError re-loading after a rejection)
+  // the trackers are preserved so the stale-rejection counter can escalate to
+  // a stop instead of resetting every recovery cycle.
+  resetMintProgress(token.contract.contractRef);
   glyph.value = token.glyph;
   updateWork();
 
@@ -1517,6 +1664,15 @@ async function updateContract() {
 
   const ids = await fetchRef(reverseRef(ref));
   const location = ids[1]?.tx_hash;
+  // If the confirmed tip is one of our own broadcasts, the chain has confirmed
+  // up to that height — advance the confirmed-progress marker the
+  // unconfirmed-chain throttle relies on (otherwise solo mining, whose
+  // confirmed tip is always our own txid, would never register progress).
+  lastResolvedHeight = resolvedHeightFromConfirmedTip(
+    location,
+    broadcastHeights,
+    lastResolvedHeight,
+  );
   if (
     contract.value &&
     location !== contract.value?.location &&
@@ -1525,6 +1681,22 @@ async function updateContract() {
     console.debug(`New contract location ${location}`);
     const locTx = await fetchTx(location, true);
     const parsed = await parseContractTx(locTx, ref);
+
+    if (parsed?.state === "active") {
+      const resolvedHeight = parsed.params.height;
+      if (resolvedHeight > lastResolvedHeight) lastResolvedHeight = resolvedHeight;
+      // The indexer's ref.get is a CONFIRMED-only resolver. If our mints are
+      // sitting unconfirmed it can report a stale (e.g. genesis) location whose
+      // height is BELOW what we've already broadcast. Re-pinning to it would
+      // re-mine already-spent/conflicted outputs, so ignore the regression and
+      // keep our optimistic tip.
+      if (isStaleRegression(resolvedHeight, highestBroadcastHeight)) {
+        console.debug(
+          `Ignoring regressed contract location ${location} (height ${resolvedHeight} < already-broadcast ${highestBroadcastHeight})`
+        );
+        return;
+      }
+    }
 
     if (parsed?.state && parsed.params.message) {
       addMessage({
