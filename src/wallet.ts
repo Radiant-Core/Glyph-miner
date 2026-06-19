@@ -1,5 +1,6 @@
 import { Buffer } from "buffer";
-import { Networks, PrivateKey } from "@radiant-core/radiantjs";
+import { PrivateKey } from "@radiant-core/radiantjs";
+import { network } from "./network";
 import { generateMnemonic, mnemonicToSeedSync } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
 import { HDKey } from "@scure/bip32";
@@ -52,7 +53,7 @@ function createKeys(mnemonic: string, type: DerivationType): Wallet | undefined 
     hdKey.derive(pathFor(type)).privateKey as Uint8Array
   ).toString("hex");
   if (!key) return;
-  const privKey = new PrivateKey(key, Networks.mainnet);
+  const privKey = new PrivateKey(key, network);
   const address = privKey?.toAddress().toString() as string;
 
   return { privKey, address, mnemonic };

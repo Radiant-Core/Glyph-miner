@@ -11,6 +11,7 @@ import {
   wallet,
 } from "./signals";
 import { createWallet, openWallet } from "./wallet";
+import { isMainnet, networkDefaultServers } from "./network";
 
 // Server ordering matters for V2 (BLAKE3/K12) dMint contracts. ElectrumX
 // just forwards `transaction.broadcast` to the node behind it; the script
@@ -97,32 +98,40 @@ restApiUrl.value = localStorage.getItem("restApiUrl") || "https://glyph-miner.co
 // makes "remove server" stick for one session and reappear on the next.
 // Users who want refreshed defaults can clear the entry from Settings or
 // localStorage.
-const storedServers = localStorage.getItem("servers");
-if (storedServers) {
-  try {
-    const parsed: string[] = JSON.parse(storedServers);
-    const list = Array.isArray(parsed) && parsed.length > 0
-      ? parsed
-      : defaultServers.slice();
-    // Rewrite any legacy direct-port radiantcore endpoints → :443 and persist
-    // so the fix sticks across sessions.
-    const upgraded = upgradeServers(list);
-    servers.value = upgraded;
-    if (
-      upgraded.length !== list.length ||
-      upgraded.some((s, i) => s !== list[i])
-    ) {
-      localStorage.setItem("servers", JSON.stringify(upgraded));
-    }
-  } catch {
-    // Corrupt JSON in storage — fall back to defaults rather than crash.
-    servers.value = defaultServers.slice();
-  }
-} else {
-  // Deterministic order — first entries are Radiant Core nodes that
-  // accept V2 BLAKE3/K12 dMint contracts. See defaultServers comment.
-  servers.value = defaultServers.slice();
+if (!isMainnet && networkDefaultServers) {
+  // Non-mainnet (regtest/testnet): always pin to the network's indexer and ignore
+  // any mainnet server list saved in localStorage from a prior session. The
+  // mainnet upgrade/merge logic below would otherwise drop the regtest endpoint.
+  servers.value = networkDefaultServers.slice();
   localStorage.setItem("servers", JSON.stringify(servers.value));
+} else {
+  const storedServers = localStorage.getItem("servers");
+  if (storedServers) {
+    try {
+      const parsed: string[] = JSON.parse(storedServers);
+      const list = Array.isArray(parsed) && parsed.length > 0
+        ? parsed
+        : defaultServers.slice();
+      // Rewrite any legacy direct-port radiantcore endpoints → :443 and persist
+      // so the fix sticks across sessions.
+      const upgraded = upgradeServers(list);
+      servers.value = upgraded;
+      if (
+        upgraded.length !== list.length ||
+        upgraded.some((s, i) => s !== list[i])
+      ) {
+        localStorage.setItem("servers", JSON.stringify(upgraded));
+      }
+    } catch {
+      // Corrupt JSON in storage — fall back to defaults rather than crash.
+      servers.value = defaultServers.slice();
+    }
+  } else {
+    // Deterministic order — first entries are Radiant Core nodes that
+    // accept V2 BLAKE3/K12 dMint contracts. See defaultServers comment.
+    servers.value = defaultServers.slice();
+    localStorage.setItem("servers", JSON.stringify(servers.value));
+  }
 }
 
 connect();

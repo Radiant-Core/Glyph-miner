@@ -485,6 +485,18 @@ export function daaModeToId(mode?: string): bigint {
 const MAX_TARGET = 0x7fffffffffffffffn;
 const MAX_TARGET_DIV4 = MAX_TARGET >> 2n; // 0x1FFF_FFFF_FFFF_FFFF — LWMA pre-cap
 
+// ASERT-v2 fixed-point constants. Must match Photonic-Wallet
+// packages/lib/src/dmintDaaV2.ts and buildAsertDaaBytecode (script.ts).
+const ASERT_V2_RADIX = 65536n; // 2^16
+const ASERT_V2_DRIFT_CLAMP = ASERT_V2_RADIX >> 2n; // 16384 → ±25%/block
+
+/**
+ * LEGACY ASERT (integer power-of-2 stepper). Governs tokens deployed BEFORE the
+ * 2026-06-19 ASERT-v2 in-place upgrade — their immutable codeScript carries this
+ * formula, so the miner MUST keep using it for them or the next-state target push
+ * fails PartC OP_EQUALVERIFY. New tokens use computeAsertV2Target. Selection is by
+ * the asertVersion the parser detects from the codeScript shape.
+ */
 export function computeAsertTarget(
   oldTarget: bigint,
   lastTime: bigint,
@@ -515,6 +527,43 @@ export function computeAsertTarget(
   }
 
   // Clamp to minimum 1
+  if (newTarget < 1n) newTarget = 1n;
+  return newTarget;
+}
+
+/**
+ * ASERT-v2: fractional, symmetric, damped retarget. Exact mirror of Photonic-
+ * Wallet packages/lib/src/dmintDaaV2.ts computeAsertV2Target and the on-chain
+ * buildAsertDaaBytecode. Every intermediate stays inside int64 by construction
+ * (proof in dmintDaaV2.ts), so this matches the contract bit-for-bit.
+ *
+ *   excess    = (currentTime - lastTime) - targetTime
+ *   driftFp   = (excess * RADIX) / halfLife                 // signed, trunc toward 0
+ *   driftFp   = clamp(driftFp, -RADIX/4, +RADIX/4)
+ *   t         = min(oldTarget, MAX_TARGET/4)
+ *   newTarget = clamp(t + (t / RADIX) * driftFp, 1, MAX_TARGET/4)
+ */
+export function computeAsertV2Target(
+  oldTarget: bigint,
+  lastTime: bigint,
+  currentTime: bigint,
+  targetTime: bigint,
+  halfLife: bigint,
+): bigint {
+  if (halfLife < 1n) halfLife = 1n; // on-chain bakes >=1; guard against /0
+
+  const excess = currentTime - lastTime - targetTime;
+  let driftFp = (excess * ASERT_V2_RADIX) / halfLife; // trunc toward 0
+
+  if (driftFp > ASERT_V2_DRIFT_CLAMP) driftFp = ASERT_V2_DRIFT_CLAMP;
+  if (driftFp < -ASERT_V2_DRIFT_CLAMP) driftFp = -ASERT_V2_DRIFT_CLAMP;
+
+  const t = oldTarget > MAX_TARGET_DIV4 ? MAX_TARGET_DIV4 : oldTarget;
+
+  const delta = (t / ASERT_V2_RADIX) * driftFp; // divide-first ⇒ overflow-safe
+  let newTarget = t + delta;
+
+  if (newTarget > MAX_TARGET_DIV4) newTarget = MAX_TARGET_DIV4;
   if (newTarget < 1n) newTarget = 1n;
   return newTarget;
 }
@@ -729,14 +778,34 @@ export function buildNextContractState(
 
     let newTarget = oldTarget;
     if (contract.daaMode === "asert") {
-      const halfLife = BigInt(contract.daaParams?.halfLife || 3600);
-      newTarget = computeAsertTarget(
-        oldTarget,
-        lastTime,
-        currentTime,
-        targetTime,
-        halfLife,
-      );
+      // Fallback only when the parser couldn't read the baked halfLife (the real
+      // value is normally extracted from the codeScript). MUST equal Photonic-
+      // Wallet script.ts DEFAULT_ASERT_HALFLIFE (240) so an omitted-halfLife
+      // deploy and this mirror agree.
+      const halfLife = BigInt(contract.daaParams?.halfLife || 240);
+      // asertVersion is detected from the codeScript shape by the parser
+      // (extractDaaParamsFromCodeScript). Tokens deployed before the 2026-06-19
+      // upgrade carry the legacy power-of-2 bytecode (version 1); newer ones the
+      // fractional v2 bytecode. Default to legacy for any contract the parser
+      // didn't tag, so an already-deployed token is never mined with the wrong
+      // formula. Mismatch ⇒ PartC OP_EQUALVERIFY rejects the mint.
+      const asertVersion = Number(contract.daaParams?.asertVersion ?? 1);
+      newTarget =
+        asertVersion >= 2
+          ? computeAsertV2Target(
+              oldTarget,
+              lastTime,
+              currentTime,
+              targetTime,
+              halfLife,
+            )
+          : computeAsertTarget(
+              oldTarget,
+              lastTime,
+              currentTime,
+              targetTime,
+              halfLife,
+            );
     } else if (contract.daaMode === "lwma") {
       newTarget = computeLinearTarget(
         oldTarget,

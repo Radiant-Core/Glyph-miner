@@ -90,7 +90,7 @@ export type DaaParamsEpoch = {
 
 export type DaaParamsAsert = {
   targetTime: number;     // Target seconds between mints (default 60)
-  halfLife: number;       // Half-life in seconds (default 3600)
+  halfLife: number;       // Half-life in seconds (default 240; see DEFAULT_ASERT_HALFLIFE)
 };
 
 export type DaaParamsLwma = {

@@ -9,7 +9,6 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { program } from 'commander';
 import { getAlgorithmConfig, isAlgorithmSupported } from './src/algorithms';
-import { createDAAManager, getDefaultDAAParams } from './src/daa';
 import { getGPUMemoryInfo, checkMemoryCompatibility, optimizeMemoryParameters } from './src/gpu-memory';
 import { RECOMMENDED_MIN_DIFFICULTY } from './src/algorithms/types';
 
@@ -183,19 +182,13 @@ if (config.algorithm === 'argon2light') {
   }
 }
 
-// Setup DAA
-const daaParams = getDefaultDAAParams(config.daaMode as any);
-if (config.targetBlockTime) {
-  daaParams.targetBlockTime = config.targetBlockTime;
-}
-
-const daaManager = createDAAManager(
-  config.daaMode as any,
-  daaParams,
-  BigInt(config.difficulty),
-  0,
-  Date.now()
-);
+// NOTE: This CLI is a configuration/benchmark helper and a mining DEMO (the loop
+// below simulates hashing). The REAL difficulty-adjustment math lives in
+// src/blockchain.ts (computeAsertTarget / computeAsertV2Target / computeLinearTarget
+// / computeEpochTarget, dispatched by buildNextContractState) and is what the web
+// miner and the contract agree on. A previous parallel DAA implementation in
+// src/daa/ diverged from the on-chain bytecode and was removed (2026-06-19); any
+// future real CLI miner must reuse the blockchain.ts functions, never a second copy.
 
 // Display configuration
 console.log(chalk.blue('Glyph Mining Configuration:'));

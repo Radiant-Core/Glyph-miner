@@ -393,7 +393,7 @@ function mapDaaModeId(modeId: number): Contract["daaMode"] | undefined {
  * Used to extract deploy-time DAA parameters baked into the codescript
  * (e.g. ASERT's halfLife at `c552799453795379 94 <push> 96`), which the
  * miner needs to mirror the on-chain DAA computation exactly. Without this,
- * the miner uses defaults (3600 for halfLife) and the next-state target push
+ * the miner uses the fallback (240 for halfLife) and the next-state target push
  * diverges from what PartC reconstructs → state-script OP_EQUALVERIFY fails.
  */
 function decodePushAt(hex: string, pos: number): { value: bigint; nextPos: number } | undefined {
@@ -462,12 +462,12 @@ function decodePushAt(hex: string, pos: number): { value: bigint; nextPos: numbe
  * identical to what PartC reconstructs from `OP_FROMALTSTACK + MINIMAL_PUSH`.
  *
  * Pre-2026-05-27 the miner left `daaParams = undefined`, falling back to the
- * library defaults (halfLife=3600 for ASERT). Any contract deployed with a
+ * the fallback (halfLife=240 for ASERT). Any contract deployed with a
  * non-default halfLife would emit a mismatched next-state target push and
  * fail the PartC state-script OP_EQUALVERIFY. See bug #4 of the V2-launch
  * remediation.
  */
-function extractDaaParamsFromCodeScript(
+export function extractDaaParamsFromCodeScript(
   codeScript: string,
   daaMode: Contract["daaMode"],
 ): Record<string, unknown> | undefined {
@@ -475,27 +475,38 @@ function extractDaaParamsFromCodeScript(
   const lower = codeScript.toLowerCase();
 
   if (daaMode === "asert") {
-    // ASERT prefix: c5 5279 94 5379 94 <halfLifePush> 96 (DIV)
+    // Common prefix (both ASERT versions): c5 5279 94 5379 94 → excess on stack.
     //   c5      OP_TXLOCKTIME
     //   5279    OP_2 OP_PICK     → lastTime
     //   94      OP_SUB            → timeDelta
     //   5379    OP_3 OP_PICK     → targetTime
     //   94      OP_SUB            → excess
-    //   <push>  halfLife
-    //   96      OP_DIV            → drift
-    // 7-byte prefix, 14 hex chars.
+    //
+    // Then the two versions diverge:
+    //   LEGACY (v1, integer power-of-2 stepper, pre-2026-06-19):
+    //       <halfLifePush> 96(DIV)                 → drift
+    //   V2 (fractional fixed-point):
+    //       03000001(push RADIX=65536) 95(MUL) <halfLifePush> 96(DIV)  → driftFp
+    // The "03000001 95" signature (RADIX push + OP_MUL) uniquely identifies v2;
+    // the miner must use the matching computeAsert(V2)Target or PartC rejects.
     const prefix = "c5" + "5279" + "94" + "5379" + "94";
     const idx = lower.indexOf(prefix);
     if (idx < 0) return undefined;
-    const pushStart = idx + prefix.length;
+    let pushStart = idx + prefix.length;
+    let asertVersion = 1;
+    // v2 signature: RADIX push (03000001) + OP_MUL (95) before the halfLife div.
+    if (lower.slice(pushStart, pushStart + 10) === "03000001" + "95") {
+      asertVersion = 2;
+      pushStart += 10; // skip "03000001" (8 hex) + "95" (2 hex)
+    }
     const decoded = decodePushAt(lower, pushStart);
     if (!decoded) return undefined;
-    // Sanity: the byte immediately after the push must be OP_DIV (0x96).
+    // Sanity: the byte immediately after the halfLife push must be OP_DIV (0x96).
     if (lower.slice(decoded.nextPos, decoded.nextPos + 2) !== "96") {
       return undefined;
     }
     if (decoded.value <= 0n) return undefined;
-    return { halfLife: Number(decoded.value) };
+    return { halfLife: Number(decoded.value), asertVersion };
   }
 
   if (daaMode === "lwma") {
@@ -643,7 +654,7 @@ export async function parseContractTx(tx: Transaction, ref: string) {
         // Extract deploy-time DAA params from the codescript so the miner's
         // local DAA computation matches the on-chain bytecode exactly. See
         // extractDaaParamsFromCodeScript above. Without this the miner falls
-        // back to library defaults (halfLife=3600 for ASERT, epochLength=2016
+        // back to the fallback (halfLife=240 for ASERT, epochLength=2016
         // for EPOCH) and any non-default deploy produces a wrong newTarget
         // → state-script OP_EQUALVERIFY fails on the spend.
         daaParams = extractDaaParamsFromCodeScript(codeScript, daaMode);
