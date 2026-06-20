@@ -5,6 +5,7 @@ import { useSignals } from "@preact/signals-react/runtime";
 import { gpu, hideMessages, messages } from "./signals";
 import ShortId from "./ShortId";
 import ShortRef from "./ShortRef";
+import MonoTag from "./components/MonoTag";
 
 function formatDuration(seconds: number) {
   if (seconds <= 60) {
@@ -14,34 +15,10 @@ function formatDuration(seconds: number) {
   return `${minutes} minutes`;
 }
 
-function Id({ children }: PropsWithChildren) {
-  return (
-    <Text
-      fontFamily="Source Code Pro Variable"
-      color="chakra-body-text"
-      bgColor="blackAlpha.400"
-      as="span"
-      px={1}
-      py={1}
-    >
-      {children}
-    </Text>
-  );
-}
-
 function Msg({ children }: PropsWithChildren) {
   return children ? (
-    <Text as="span" ml={2}>
-      Message:{" "}
-      <Text
-        color="chakra-body-text"
-        bgColor="blackAlpha.400"
-        as="span"
-        px={1}
-        py={1}
-      >
-        {children}
-      </Text>
+    <Text as="span" ml={2} color="text.secondary">
+      Message: <MonoTag>{children}</MonoTag>
     </Text>
   ) : null;
 }
@@ -49,10 +26,11 @@ function Msg({ children }: PropsWithChildren) {
 function Line({ children }: PropsWithChildren) {
   return (
     <Flex
-      fontFamily="Source Code Pro Variable"
+      fontFamily="ono"
       gap={4}
       py={1}
-      fontSize="medium"
+      fontSize="sm"
+      color="text.secondary"
       flexWrap={{ base: "wrap", md: "initial" }}
     >
       {children}
@@ -67,75 +45,72 @@ export default function Messages() {
     <>
       {messages.value.map((m) => (
         <Line key={m.id}>
-          <div>{m.date}</div>
+          <Box color="text.muted" flexShrink={0}>
+            {m.date}
+          </Box>
           <Box wordBreak="break-all">
             {m.type === "found" && (
               <>
-                Found nonce <Id>{m.nonce}</Id>
+                Found nonce <MonoTag>{m.nonce}</MonoTag>
               </>
             )}
             {m.type === "accept" && (
               <>
-                <Text
-                  color="green.300"
-                  bgGradient="linear(to-r, lightBlue.A400, lightGreen.A400)"
-                  bgClip="text"
-                  as="span"
-                >
+                <Text as="span" color="positive.fg" fontWeight="semibold">
                   Tokens minted!{" "}
                 </Text>
                 <Icon
                   as={GoSmiley}
                   verticalAlign="middle"
                   boxSize={4}
-                  color="lightGreen.A400"
+                  color="accent.fg"
                 />{" "}
-                <Id>
+                <MonoTag>
                   <ShortId id={m.txid} />
-                </Id>
+                </MonoTag>
                 <Msg>{m.msg.substring(0, 80)}</Msg>
               </>
             )}
             {m.type === "new-location" && (
               <>
                 New contract received{" "}
-                <Id>
+                <MonoTag>
                   <ShortId id={m.txid} />
-                </Id>
+                </MonoTag>
                 {hideMessages.value || <Msg>{m.msg}</Msg>}
               </>
             )}
             {m.type === "reject" && (
-              <>
-                Nonce rejected <Id>{m.nonce}</Id>
+              <Text as="span" color="negative.fg">
+                Nonce rejected <MonoTag>{m.nonce}</MonoTag>
                 {m.reason && <>({m.reason})</>}
-              </>
+              </Text>
             )}
             {m.type === "general" && m.msg}
             {m.type === "minted-out" && (
-              <Text color="red.A200">
+              <Text as="span" color="negative.fg">
                 Token{" "}
-                <Id>
+                <MonoTag>
                   <ShortRef id={m.ref} />
-                </Id>{" "}
+                </MonoTag>{" "}
                 is minted out!
                 {hideMessages || <Msg>{m.msg}</Msg>}
               </Text>
             )}
             {m.type === "not-found" && (
-              <Text color="red.A200">
+              <Text as="span" color="negative.fg">
                 No dmint contract found for{" "}
-                <Id>
+                <MonoTag>
                   <ShortRef id={m.ref} />
-                </Id>
+                </MonoTag>
               </Text>
             )}
             {m.type === "loaded" && (
               <>
                 Contract{" "}
-                <Id>
+                <MonoTag>
                   <ShortRef id={m.ref} />
-                </Id>{" "}
+                </MonoTag>{" "}
                 loaded
               </>
             )}
@@ -145,7 +120,11 @@ export default function Messages() {
                 {formatDuration(m.seconds)}
               </>
             )}
-            {m.type === "start" && <>Mining started</>}
+            {m.type === "start" && (
+              <Text as="span" color="positive.fg">
+                Mining started
+              </Text>
+            )}
             {m.type === "stop" && (
               <>Mining stopped{m.reason ? <> — {m.reason}</> : null}</>
             )}

@@ -3,7 +3,7 @@
     filter: blur(0);
   }
   100% {
-    filter: blur(7px);
+    filter: blur(3px);
   }
 }
 
@@ -30,7 +30,7 @@ html {
 
 /* Select option styling for dark theme */
 option {
-  background: #2a2a30;
+  background: #26262d;
   color: #ededed;
 }
 

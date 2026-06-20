@@ -494,6 +494,51 @@ export async function fetchContractsExtended(): Promise<ExtendedContractsRespons
   }
 }
 
+// Coalesce + throttle full extended-contracts refreshes so the token-supply
+// aggregate stays reasonably live without a 5000-contract fetch per mint.
+let extendedFetchAt = 0;
+let extendedFetchInflight: Promise<ExtendedContractsResponse | null> | null = null;
+
+async function ensureFreshExtended(maxAgeMs = 15000): Promise<void> {
+  const now = Date.now();
+  if (extendedContractsCache.size && now - extendedFetchAt < maxAgeMs) return;
+  if (!extendedFetchInflight) {
+    extendedFetchInflight = fetchContractsExtended().finally(() => {
+      extendedFetchAt = Date.now();
+      extendedFetchInflight = null;
+    });
+  }
+  await extendedFetchInflight;
+}
+
+export interface TokenSupply {
+  minedSupply: number;
+  totalSupply: number;
+  percentMined: number;
+  contracts: number;
+}
+
+/**
+ * Token-level mint aggregate across ALL of a token's sub-contracts, keyed by
+ * the BE token ref. The indexer's token summary already sums supply across
+ * contracts, so this is what the UI should show for whole-token progress.
+ * Returns null when the aggregate is unavailable (offline / token not indexed /
+ * supply totals missing) so callers can fall back to the single-contract view.
+ */
+export async function fetchTokenSupply(tokenRef: string): Promise<TokenSupply | null> {
+  await ensureFreshExtended();
+  const c = getFromExtendedCache(tokenRef);
+  if (!c) return null;
+  const totalSupply = c.total_supply ?? 0;
+  const minedSupply = c.mined_supply ?? 0;
+  if (totalSupply <= 0) return null;
+  const percentMined =
+    typeof c.percent_mined === "number"
+      ? c.percent_mined
+      : (minedSupply / totalSupply) * 100;
+  return { minedSupply, totalSupply, percentMined, contracts: c.outputs ?? 0 };
+}
+
 /**
  * Fetch a single contract by ref.
  */

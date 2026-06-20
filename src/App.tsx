@@ -10,12 +10,12 @@ export default function App() {
     <ChakraBaseProvider theme={theme}>
       <Outlet />
       <Container maxW="container.lg" mb={2} mt={4}>
-        <Center fontSize="xs" textAlign="center" mb={1} color="gray.500">
+        <Center fontSize="xs" textAlign="center" mb={1} color="text.muted">
           <Link to="/license">
             Glyph Miner is distributed under the terms of the MIT License
           </Link>
         </Center>
-        <Center fontSize="xs" textAlign="center" color="gray.600">
+        <Center fontSize="xs" textAlign="center" color="text.muted">
           v{APP_VERSION}
         </Center>
       </Container>

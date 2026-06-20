@@ -8,22 +8,33 @@ import {
   Flex,
   Icon,
   Box,
-  Text,
   Button,
+  SimpleGrid,
+  Text,
+  Tooltip,
   useToast,
 } from "@chakra-ui/react";
 import { BsGpuCard } from "react-icons/bs";
-import { Search2Icon, SettingsIcon } from "@chakra-ui/icons";
+import { Search2Icon } from "@chakra-ui/icons";
 import { FaPlay, FaStop } from "react-icons/fa6";
-import { TbPick, TbListDetails } from "react-icons/tb";
+import {
+  TbActivity,
+  TbCircleCheck,
+  TbCircleX,
+  TbListDetails,
+  TbPick,
+  TbWallet,
+} from "react-icons/tb";
 import TokenDetails from "../TokenDetails";
 import miner from "../miner";
 import Hashrate from "../Hashrate";
 import Messages from "../Messages";
 import Accepted from "../Accepted";
+import Balance from "../Balance";
 import {
   balance,
   contract,
+  glyph,
   gpu,
   mineToAddress,
   miningEnabled,
@@ -39,8 +50,17 @@ import "../initWallet";
 import "../index.css";
 import { addMessage } from "../message";
 import BottomBar from "../BottomBar";
-import { isRef } from "../utils";
+import { isRef, photonsToRXD } from "../utils";
 import { ServerStatus, serverStatus } from "../client";
+import Panel from "../components/Panel";
+import ConnectionStatus from "../ConnectionStatus";
+import StatCard from "../components/StatCard";
+import EmptyState from "../components/EmptyState";
+import HashrateChart from "../components/HashrateChart";
+import MonoTag from "../components/MonoTag";
+import ReadinessChecklist, {
+  ChecklistItem,
+} from "../components/ReadinessChecklist";
 
 export default function Miner() {
   useSignals();
@@ -93,25 +113,90 @@ export default function Miner() {
   };
 
   const gpuSupported = navigator.gpu && gpu.value !== undefined;
+
   // balance.value is in photons; compare against the per-contract floor.
-  // The previous `balance.value > 0.01 + reward` compared photons to a
-  // fractional RXD constant and effectively always evaluated true, allowing
-  // the Start button even when the wallet couldn't fund a single mint.
   const balanceFloorPhotons = contract.value
     ? estimateMintBalanceFloorPhotons(contract.value)
     : Infinity;
+
+  // Decompose the start conditions ONCE; `canStart` and the readiness checklist
+  // are both derived from these same booleans so the gating logic never forks.
+  const contractLoaded = contract.value !== undefined;
+  const supplyRemaining =
+    !!contract.value && contract.value.height < contract.value.maxHeight;
+  const payoutSet = !!mineToAddress.value;
+  const funded = balance.value >= balanceFloorPhotons;
+  const connected = serverStatus.value === ServerStatus.CONNECTED;
+
   const canStart =
-    contract.value !== undefined &&
-    contract.value.height < contract.value.maxHeight &&
-    balance.value >= balanceFloorPhotons &&
-    mineToAddress.value &&
-    serverStatus.value === ServerStatus.CONNECTED;
+    contractLoaded && supplyRemaining && funded && payoutSet && connected;
+
+  const ticker = (glyph.value?.payload.ticker as string) || "";
+  // Supply and balance can only be evaluated once a contract is loaded, so
+  // those rows appear progressively (avoids a misleading "fully mined" /
+  // "insufficient balance" before any contract is selected).
+  const readinessItems: ChecklistItem[] = [
+    {
+      ok: contractLoaded,
+      label: contractLoaded
+        ? `Contract loaded${ticker ? ` — ${ticker}` : ""}`
+        : "No contract loaded",
+      hint: "Enter a contract address or pick one from the list.",
+      to: "/tokens",
+      toLabel: "Browse",
+    },
+    ...(contractLoaded
+      ? [
+          {
+            ok: supplyRemaining,
+            label: supplyRemaining
+              ? "Contract has remaining supply"
+              : "Contract is fully mined",
+            hint: "This contract is minted out — choose another.",
+            to: "/tokens",
+            toLabel: "Browse",
+          },
+        ]
+      : []),
+    {
+      ok: payoutSet,
+      label: payoutSet ? "Payout address set" : "No payout address set",
+      hint: "Set the address that receives your minted tokens.",
+      to: "/settings",
+      toLabel: "Settings",
+    },
+    ...(contractLoaded
+      ? [
+          {
+            ok: funded,
+            label: funded ? "Wallet funded" : "Insufficient wallet balance",
+            hint: `Fund the temporary wallet with at least ${photonsToRXD(
+              balanceFloorPhotons
+            )} RXD.`,
+            to: "/settings",
+            toLabel: "Fund",
+          },
+        ]
+      : []),
+    {
+      ok: connected,
+      label: connected ? "Connected to a server" : "Not connected to a server",
+      hint: "Waiting for a server connection…",
+    },
+  ];
 
   return (
     <>
       <TopBar />
       <BottomBar />
-      <Box bg="bg.300" mt="56px" borderBottom="1px solid" borderBottomColor="whiteAlpha.50">
+
+      {/* Contract search */}
+      <Box
+        bg="surface.inset"
+        mt="56px"
+        borderBottom="1px solid"
+        borderBottomColor="border.subtle"
+      >
         <Container maxW="container.lg">
           <form onSubmit={onSubmit}>
             <Flex gap={3} mx="auto" py={4}>
@@ -150,138 +235,117 @@ export default function Miner() {
           </form>
         </Container>
       </Box>
-      <Container maxW="container.lg">
-        {gpuSupported && (
-          <Flex
-            bg="bg.100"
-            py={3}
-            px={4}
-            mt={4}
-            alignItems="center"
-            justifyContent="space-between"
-            gap={4}
-            borderRadius="xl"
-            border="1px solid"
-            borderColor="whiteAlpha.50"
-          >
-            <Icon as={BsGpuCard} boxSize={6} color="lightGreen.A200" />
-            <Box flexGrow={1} fontSize="sm" fontWeight="medium">{gpu.value}</Box>
-            <Box fontSize="sm" fontWeight="semibold" color="lightGreen.A200">
-              <Hashrate />
-            </Box>
-            {miningEnabled.value ? (
-              <IconButton
-                onClick={stopMining}
-                icon={<Icon as={FaStop} color="red.400" />}
-                aria-label="Stop mining"
-                variant="ghost"
-                size="sm"
-              />
-            ) : (
-              <IconButton
-                onClick={startMining}
-                isDisabled={!canStart}
-                icon={
-                  <Icon
-                    as={FaPlay}
-                    color={canStart ? "lightGreen.A200" : undefined}
-                  />
-                }
-                aria-label="Start mining"
-                variant="ghost"
-                size="sm"
-              />
-            )}
-          </Flex>
-        )}
 
-        <TokenDetails />
-
+      <Container maxW="container.lg" pb={10}>
         {gpuSupported ? (
           <>
-            {mineToAddress.value ? (
-              <>
-                <Flex
-                  bg="bg.100"
-                  p={4}
-                  mt={3}
-                  alignItems="center"
-                  justifyContent="space-between"
-                  gap={4}
-                  flexWrap={{ base: "wrap", md: "initial" }}
-                  borderRadius="xl"
-                  border="1px solid"
-                  borderColor="whiteAlpha.50"
-                >
-                  <Flex flexGrow={1} wordBreak="break-all" alignItems="center" fontSize="sm">
-                    <Icon as={TbPick} boxSize={5} color="gray.400" mr={2} />
-                    <Text>Mine to</Text>
-                    <Text
-                      bgColor="whiteAlpha.100"
-                      as="span"
-                      px={2}
-                      py={0.5}
-                      ml={2}
-                      borderRadius="md"
-                      fontFamily="Source Code Pro Variable, monospace"
-                      fontSize="xs"
-                    >
-                      {mineToAddress.value}
-                    </Text>
-                  </Flex>
-                  <Box
-                    borderRight="1px solid"
-                    borderRightColor="whiteAlpha.200"
-                    pr={4}
-                    fontSize="sm"
-                  >
-                    Accepted:{" "}
-                    <Text as="b" color="lightGreen.A200">
-                      <Accepted />
-                    </Text>
-                  </Box>
-                  <Box fontSize="sm">
-                    Rejected:{" "}
-                    <Text as="b" color="red.400">
-                      <Rejected />
-                    </Text>
-                  </Box>
-                </Flex>
-                <Box
-                  mt={3}
-                  mb={8}
-                  bgColor="bg.400"
-                  p={3}
-                  px={4}
-                  borderRadius="xl"
-                  border="1px solid"
-                  borderColor="whiteAlpha.50"
-                  fontSize="sm"
-                >
-                  <Messages />
-                </Box>
-              </>
-            ) : (
-              <Flex direction="column" alignItems="center" my={24}>
-                <Text fontSize="x-large" mb={4} fontWeight="medium">
-                  Please configure the miner and fund the wallet
+            {/* Control bar: GPU + connection + the primary Start/Stop action */}
+            <Panel
+              mt={4}
+              display="flex"
+              alignItems="center"
+              gap={4}
+              flexWrap="wrap"
+            >
+              <Icon as={BsGpuCard} boxSize={6} color="accent.fg" />
+              <Box flexGrow={1} minW="120px">
+                <Text fontSize="sm" fontWeight="semibold" noOfLines={1}>
+                  {gpu.value}
                 </Text>
-                <Button as={Link} leftIcon={<SettingsIcon />} to="/settings">
-                  Settings
+                <ConnectionStatus mt={1} />
+              </Box>
+              {miningEnabled.value ? (
+                <Button
+                  onClick={stopMining}
+                  leftIcon={<Icon as={FaStop} />}
+                  colorScheme="red"
+                >
+                  Stop mining
                 </Button>
+              ) : (
+                <Tooltip
+                  label="Resolve the items below to start"
+                  isDisabled={canStart}
+                  hasArrow
+                >
+                  <Box>
+                    <Button
+                      onClick={startMining}
+                      isDisabled={!canStart}
+                      leftIcon={<Icon as={FaPlay} />}
+                    >
+                      Start mining
+                    </Button>
+                  </Box>
+                </Tooltip>
+              )}
+            </Panel>
+
+            {/* Readiness checklist — explains a disabled Start button */}
+            <ReadinessChecklist ready={canStart} items={readinessItems} />
+
+            {/* Active contract summary */}
+            <TokenDetails />
+
+            {/* Payout destination */}
+            {payoutSet && (
+              <Flex
+                align="center"
+                gap={2}
+                mt={3}
+                fontSize="sm"
+                color="text.muted"
+                flexWrap="wrap"
+              >
+                <Icon as={TbPick} boxSize={4} />
+                <Text>Mining rewards to</Text>
+                <MonoTag truncate>{mineToAddress.value}</MonoTag>
               </Flex>
             )}
+
+            {/* Live stats */}
+            <SimpleGrid columns={{ base: 2, md: 4 }} spacing={3} mt={3}>
+              <StatCard
+                label="Hashrate"
+                icon={TbActivity}
+                tone="accent"
+                value={<Hashrate />}
+                sub={<HashrateChart />}
+              />
+              <StatCard
+                label="Accepted"
+                icon={TbCircleCheck}
+                tone="positive"
+                value={<Accepted />}
+              />
+              <StatCard
+                label="Rejected"
+                icon={TbCircleX}
+                tone="negative"
+                value={<Rejected />}
+              />
+              <StatCard
+                label="Balance"
+                icon={TbWallet}
+                value={
+                  <>
+                    <Balance /> <Text as="span" fontSize="md" color="text.muted">RXD</Text>
+                  </>
+                }
+              />
+            </SimpleGrid>
+
+            {/* Activity log */}
+            <Panel mt={3} bg="surface.inset" fontSize="sm">
+              <Messages />
+            </Panel>
           </>
         ) : (
-          <Flex direction="column" alignItems="center" my={24}>
-            <Icon as={BsGpuCard} width={16} height={16} mb={4} color="gray.500" />
-            <Text fontSize="x-large" mb={2} fontWeight="medium">
-              No GPU found
-            </Text>
-            <Text textAlign="center" color="gray.400">
-              Please check your browser supports WebGPU
-            </Text>
-          </Flex>
+          <EmptyState
+            icon={BsGpuCard}
+            title="No GPU found"
+            description="Glyph Miner needs WebGPU. Please check that your browser supports it and that hardware acceleration is enabled."
+          />
         )}
       </Container>
     </>

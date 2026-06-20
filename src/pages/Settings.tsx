@@ -15,12 +15,13 @@ import {
   IconButton,
   Input,
   Select,
+  Text,
   Textarea,
   useClipboard,
   useToast,
 } from "@chakra-ui/react";
 import { QRCodeSVG } from "qrcode.react";
-import { useReducer, useState } from "react";
+import { ReactNode, useReducer, useState } from "react";
 import { CheckIcon, CopyIcon } from "@chakra-ui/icons";
 import { useSignals } from "@preact/signals-react/runtime";
 import {
@@ -41,12 +42,29 @@ import { Link } from "react-router-dom";
 import { connect } from "../client";
 import { sweepWallet } from "../sweep";
 import { NETWORK_STORAGE_KEY, networkName } from "../network";
+import PageHeader from "../components/PageHeader";
+import Panel from "../components/Panel";
+import MonoTag from "../components/MonoTag";
+import StatusPill from "../components/StatusPill";
 
 const parseServers = (value: string): string[] =>
   value
     .split("\n")
     .map((s) => s.trim())
     .filter(Boolean);
+
+function SectionTitle({ children, sub }: { children: ReactNode; sub?: ReactNode }) {
+  return (
+    <Box mb={5}>
+      <Heading size="sm">{children}</Heading>
+      {sub && (
+        <Text fontSize="sm" color="text.muted" mt={1}>
+          {sub}
+        </Text>
+      )}
+    </Box>
+  );
+}
 
 export default function Settings() {
   useSignals();
@@ -195,202 +213,195 @@ export default function Settings() {
 
   return (
     <>
-      <Box bg="bg.300" borderBottom="1px solid" borderBottomColor="whiteAlpha.50">
-        <Container maxW="container.lg">
-          <Flex
-            justifyContent="space-between"
-            h={{ base: "64px", md: "96px" }}
-            alignItems="center"
-          >
-            <Heading size="lg" fontWeight="500">
-              Settings
-            </Heading>
-            <IconButton
-              icon={<CloseIcon />}
-              as={Link}
-              aria-label="Close"
-              to="/"
-              ml={4}
-              variant="ghost"
-              size="sm"
-            />
-          </Flex>
-        </Container>
-      </Box>
+      <PageHeader title="Settings">
+        <IconButton
+          icon={<CloseIcon />}
+          as={Link}
+          aria-label="Close"
+          to="/"
+          variant="ghost"
+          size="sm"
+        />
+      </PageHeader>
+
       <Container maxW="container.lg" py={6}>
-        <Box
-          bg="bg.100"
-          p={6}
-          mb={4}
-          as="form"
-          onSubmit={onSave}
-          borderRadius="2xl"
-          border="1px solid"
-          borderColor="whiteAlpha.50"
-        >
+        <Box as="form" onSubmit={onSave}>
           {error && (
             <Alert status="error" mb={4} borderRadius="xl">
+              <AlertIcon />
               {error}
             </Alert>
           )}
-          <FormControl mb={5} isRequired>
-            <FormLabel fontWeight="semibold" fontSize="sm">Mine to address</FormLabel>
-            <Input
-              name="mineToAddress"
-              defaultValue={form.mineToAddress}
-              onChange={onFormChange}
-            />
-            <FormHelperText fontSize="xs">
-              Radiant address to send mined tokens to
-            </FormHelperText>
-          </FormControl>
-          <FormControl mb={5}>
-            <FormLabel fontWeight="semibold" fontSize="sm">Mint message</FormLabel>
-            <Input
-              name="mintMessage"
-              defaultValue={form.mintMessage}
-              maxLength={80}
-              onChange={onFormChange}
-            />
-            <FormHelperText fontSize="xs">Written on-chain on successful mint</FormHelperText>
-          </FormControl>
-          <FormControl mb={5}>
-            <FormLabel fontWeight="semibold" fontSize="sm">Hide messages from other miners</FormLabel>
-            <Select
-              name="hideMessages"
-              defaultValue={form.hideMessages}
-              onChange={onFormChange}
-              title="Hide messages from other miners"
-            >
-              <option value="">No</option>
-              <option value="1">Yes</option>
-            </Select>
-          </FormControl>
-          <FormControl mb={5}>
-            <FormLabel fontWeight="semibold" fontSize="sm">Auto-reseed nonce space</FormLabel>
-            <Select
-              name="autoReseed"
-              defaultValue={form.autoReseed}
-              onChange={onFormChange}
-              title="Automatically reseed work entropy"
-            >
-              <option value="1">Yes (continue mining)</option>
-              <option value="">No (stop after full nonce space)</option>
-            </Select>
-            <FormHelperText fontSize="xs">
-              When enabled, miner mutates mint-message entropy and continues after exhausting 32-bit nonce space.
-            </FormHelperText>
-          </FormControl>
-          <FormControl mb={5}>
-            <FormLabel fontWeight="semibold" fontSize="sm">Network</FormLabel>
-            <Select
-              name="network"
-              defaultValue={form.network}
-              onChange={onFormChange}
-              title="Network"
-            >
-              <option value="mainnet">Mainnet (default)</option>
-              <option value="testnet">Testnet</option>
-              <option value="regtest">Regtest (local testing)</option>
-            </Select>
-            <FormHelperText fontSize="xs">
-              Mainnet is the default. Regtest/testnet are for local testing
-              against a stack on{" "}
-              <Code fontSize="xs">ws://localhost:50020</Code> and reload the app
-              when changed.
-            </FormHelperText>
-          </FormControl>
-          <FormControl mb={5}>
-            <FormLabel fontWeight="semibold" fontSize="sm">Servers</FormLabel>
-            <Textarea
-              name="servers"
-              value={form.servers}
-              onChange={onFormChange}
-              rows={3}
-            ></Textarea>
-            <Box mt={2}>
-              {serverList.map((server, index) => (
-                <Flex key={`${server}-${index}`} align="center" gap={2} mb={2}>
-                  <Code flex="1" fontSize="xs" p={2}>
-                    {server}
-                  </Code>
-                  <Button
-                    type="button"
-                    size="xs"
-                    onClick={() => moveServer(index, -1)}
-                    isDisabled={index === 0}
-                  >
-                    Up
-                  </Button>
-                  <Button
-                    type="button"
-                    size="xs"
-                    onClick={() => moveServer(index, 1)}
-                    isDisabled={index === serverList.length - 1}
-                  >
-                    Down
-                  </Button>
-                </Flex>
-              ))}
-            </Box>
-            <FormHelperText fontSize="xs">
-              List of servers in order of preference (top is tried first)
-            </FormHelperText>
-          </FormControl>
-          <FormControl mb={5}>
-            <FormLabel fontWeight="semibold" fontSize="sm">Use RXinDexer API</FormLabel>
-            <Select
-              name="useIndexerApi"
-              defaultValue={form.useIndexerApi}
-              onChange={onFormChange}
-              title="Use RXinDexer API for contract discovery"
-            >
-              <option value="1">Yes (recommended)</option>
-              <option value="">No (use fallback URL)</option>
-            </Select>
-            <FormHelperText fontSize="xs">
-              Fetch contracts from RXinDexer dMint API. Falls back to URL if unavailable.
-            </FormHelperText>
-          </FormControl>
-          <FormControl mb={5}>
-            <FormLabel fontWeight="semibold" fontSize="sm">RXinDexer REST API URL</FormLabel>
-            <Input
-              name="restApiUrl"
-              defaultValue={form.restApiUrl}
-              onChange={onFormChange}
-              placeholder="https://indexer.example.com/api"
-            />
-            <FormHelperText fontSize="xs">
-              REST API endpoint for contract discovery (e.g., https://indexer.example.com/api)
-            </FormHelperText>
-          </FormControl>
-          <FormControl mb={5}>
-            <FormLabel fontWeight="semibold" fontSize="sm">Contracts URL (fallback)</FormLabel>
-            <Input
-              name="contractsUrl"
-              defaultValue={form.contractsUrl}
-              onChange={onFormChange}
-            />
-            <FormHelperText fontSize="xs">
-              Used when RXinDexer API is disabled or unavailable
-            </FormHelperText>
-          </FormControl>
-          <Center>
+
+          {/* Mining */}
+          <Panel mb={4}>
+            <SectionTitle sub="How and where your mined tokens are paid out.">
+              Mining
+            </SectionTitle>
+            <FormControl mb={5} isRequired>
+              <FormLabel fontWeight="semibold" fontSize="sm">Mine to address</FormLabel>
+              <Input
+                name="mineToAddress"
+                defaultValue={form.mineToAddress}
+                onChange={onFormChange}
+              />
+              <FormHelperText fontSize="xs">
+                Radiant address to send mined tokens to
+              </FormHelperText>
+            </FormControl>
+            <FormControl mb={5}>
+              <FormLabel fontWeight="semibold" fontSize="sm">Mint message</FormLabel>
+              <Input
+                name="mintMessage"
+                defaultValue={form.mintMessage}
+                maxLength={80}
+                onChange={onFormChange}
+              />
+              <FormHelperText fontSize="xs">Written on-chain on successful mint</FormHelperText>
+            </FormControl>
+            <FormControl mb={5}>
+              <FormLabel fontWeight="semibold" fontSize="sm">Hide messages from other miners</FormLabel>
+              <Select
+                name="hideMessages"
+                defaultValue={form.hideMessages}
+                onChange={onFormChange}
+                title="Hide messages from other miners"
+              >
+                <option value="">No</option>
+                <option value="1">Yes</option>
+              </Select>
+            </FormControl>
+            <FormControl>
+              <FormLabel fontWeight="semibold" fontSize="sm">Auto-reseed nonce space</FormLabel>
+              <Select
+                name="autoReseed"
+                defaultValue={form.autoReseed}
+                onChange={onFormChange}
+                title="Automatically reseed work entropy"
+              >
+                <option value="1">Yes (continue mining)</option>
+                <option value="">No (stop after full nonce space)</option>
+              </Select>
+              <FormHelperText fontSize="xs">
+                When enabled, miner mutates mint-message entropy and continues after exhausting 32-bit nonce space.
+              </FormHelperText>
+            </FormControl>
+          </Panel>
+
+          {/* Network & servers */}
+          <Panel mb={4}>
+            <SectionTitle sub="Where contracts are discovered and which nodes the miner talks to.">
+              Network &amp; servers
+            </SectionTitle>
+            <FormControl mb={5}>
+              <FormLabel fontWeight="semibold" fontSize="sm">Network</FormLabel>
+              <Select
+                name="network"
+                defaultValue={form.network}
+                onChange={onFormChange}
+                title="Network"
+              >
+                <option value="mainnet">Mainnet (default)</option>
+                <option value="testnet">Testnet</option>
+                <option value="regtest">Regtest (local testing)</option>
+              </Select>
+              <FormHelperText fontSize="xs">
+                Mainnet is the default. Regtest/testnet are for local testing
+                against a stack on{" "}
+                <Code fontSize="xs">ws://localhost:50020</Code> and reload the app
+                when changed.
+              </FormHelperText>
+            </FormControl>
+            <FormControl mb={5}>
+              <FormLabel fontWeight="semibold" fontSize="sm">Use RXinDexer API</FormLabel>
+              <Select
+                name="useIndexerApi"
+                defaultValue={form.useIndexerApi}
+                onChange={onFormChange}
+                title="Use RXinDexer API for contract discovery"
+              >
+                <option value="1">Yes (recommended)</option>
+                <option value="">No (use fallback URL)</option>
+              </Select>
+              <FormHelperText fontSize="xs">
+                Fetch contracts from RXinDexer dMint API. Falls back to URL if unavailable.
+              </FormHelperText>
+            </FormControl>
+            <FormControl mb={5}>
+              <FormLabel fontWeight="semibold" fontSize="sm">RXinDexer REST API URL</FormLabel>
+              <Input
+                name="restApiUrl"
+                defaultValue={form.restApiUrl}
+                onChange={onFormChange}
+                placeholder="https://indexer.example.com/api"
+              />
+              <FormHelperText fontSize="xs">
+                REST API endpoint for contract discovery (e.g., https://indexer.example.com/api)
+              </FormHelperText>
+            </FormControl>
+            <FormControl mb={5}>
+              <FormLabel fontWeight="semibold" fontSize="sm">Contracts URL (fallback)</FormLabel>
+              <Input
+                name="contractsUrl"
+                defaultValue={form.contractsUrl}
+                onChange={onFormChange}
+              />
+              <FormHelperText fontSize="xs">
+                Used when RXinDexer API is disabled or unavailable
+              </FormHelperText>
+            </FormControl>
+            <FormControl>
+              <FormLabel fontWeight="semibold" fontSize="sm">Servers</FormLabel>
+              <Textarea
+                name="servers"
+                value={form.servers}
+                onChange={onFormChange}
+                rows={3}
+              ></Textarea>
+              <Box mt={2}>
+                {serverList.map((server, index) => (
+                  <Flex key={`${server}-${index}`} align="center" gap={2} mb={2}>
+                    <MonoTag flex="1" p={2} truncate>
+                      {server}
+                    </MonoTag>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      onClick={() => moveServer(index, -1)}
+                      isDisabled={index === 0}
+                    >
+                      Up
+                    </Button>
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      onClick={() => moveServer(index, 1)}
+                      isDisabled={index === serverList.length - 1}
+                    >
+                      Down
+                    </Button>
+                  </Flex>
+                ))}
+              </Box>
+              <FormHelperText fontSize="xs">
+                List of servers in order of preference (top is tried first)
+              </FormHelperText>
+            </FormControl>
+          </Panel>
+
+          <Center mb={4}>
             <Button type="submit" size="lg" px={12}>Save</Button>
           </Center>
         </Box>
 
-        <Box
-          bg="bg.100"
-          p={6}
-          mb={4}
-          borderRadius="2xl"
-          border="1px solid"
-          borderColor="whiteAlpha.50"
-        >
+        {/* Temporary wallet */}
+        <Panel mb={4}>
           {wallet.value ? (
             <>
-              <Alert status="warning" borderRadius="xl">
+              <SectionTitle>Temporary wallet</SectionTitle>
+              <Alert status="warning">
                 <AlertIcon />
                 <Box fontSize="sm">
                   <b>
@@ -401,49 +412,50 @@ export default function Settings() {
                   mining.
                 </Box>
               </Alert>
-              <Flex direction="column" alignItems="center" mt={6}>
-                <Heading fontSize="md" mb={2}>Temporary Address</Heading>
-                <Box>
-                  <Code fontSize="xs">{wallet.value.address}</Code>
+              <Flex direction="column" alignItems="center" mt={6} gap={2}>
+                <Text fontSize="xs" fontWeight="bold" letterSpacing="wider" textTransform="uppercase" color="text.muted">
+                  Address
+                </Text>
+                <Flex align="center" gap={1} maxW="100%">
+                  <MonoTag truncate>{wallet.value.address}</MonoTag>
                   <IconButton
-                    display="inline"
                     onClick={onCopy}
                     icon={
                       hasCopied ? (
-                        <CheckIcon color="lightGreen.A400" />
+                        <CheckIcon color="accent.fg" />
                       ) : (
-                        <CopyIcon color="lightGreen.A400" />
+                        <CopyIcon color="accent.fg" />
                       )
                     }
                     variant="ghost"
-                    aria-label="Copy"
+                    aria-label="Copy address"
                     size="xs"
                   />
-                </Box>
+                </Flex>
                 <Box bgColor="white" p={2} mt={3} borderRadius="lg">
                   <QRCodeSVG size={128} value={wallet.value.address} />
                 </Box>
-                <Heading fontSize="md" mt={5}>
+                <Text fontSize="xs" fontWeight="bold" letterSpacing="wider" textTransform="uppercase" color="text.muted" mt={5}>
                   Balance
-                </Heading>
-                <Balance /> RXD
-                <Heading fontSize="md" mt={5}>
-                  Recovery phrase:
-                </Heading>
+                </Text>
+                <Text fontWeight="semibold"><Balance /> RXD</Text>
+                <Text fontSize="xs" fontWeight="bold" letterSpacing="wider" textTransform="uppercase" color="text.muted" mt={5}>
+                  Recovery phrase
+                </Text>
                 <Box
                   textAlign="center"
                   p={3}
-                  mt={2}
+                  mt={1}
                   borderWidth="1px"
-                  borderColor="whiteAlpha.200"
+                  borderColor="border.default"
                   borderRadius="xl"
                   alignSelf="stretch"
                 >
                   {showMnemonic ? (
                     wallet.value.mnemonic.split(" ").map((word, i) => (
-                      <>
-                        <Code key={i}>{word}</Code>{" "}
-                      </>
+                      <Code key={i} mr={1} mb={1}>
+                        {word}
+                      </Code>
                     ))
                   ) : (
                     <Button onClick={() => setShowMnemonic(true)} variant="outline" size="sm">Show</Button>
@@ -457,30 +469,30 @@ export default function Settings() {
               No wallet found
             </Alert>
           )}
-        </Box>
+        </Panel>
 
-        <Box
-          bg="bg.100"
-          p={6}
-          borderRadius="2xl"
-          border="1px solid"
-          borderColor="whiteAlpha.50"
-        >
-          <Heading size="md" mb={4}>Sweep</Heading>
-          <Box my={4} fontSize="sm">
-            Sweeping will send all coins to your address:{" "}
-            <Code fontSize="xs">{mineToAddress.value || "no address set"}</Code>
-          </Box>
+        {/* Sweep */}
+        <Panel>
+          <SectionTitle sub="Send all funds from the temporary wallet to your payout address.">
+            Sweep
+          </SectionTitle>
+          <Flex align="center" gap={2} mb={4} fontSize="sm" flexWrap="wrap">
+            <Text color="text.muted">Sweeps all coins to</Text>
+            {mineToAddress.value ? (
+              <MonoTag truncate>{mineToAddress.value}</MonoTag>
+            ) : (
+              <StatusPill tone="warning">No payout address set</StatusPill>
+            )}
+          </Flex>
           <Center>
             <Button
-              mr={3}
               onClick={onClickSweep}
-              disabled={!mineToAddress.value}
+              isDisabled={!mineToAddress.value}
             >
               Sweep
             </Button>
           </Center>
-        </Box>
+        </Panel>
       </Container>
     </>
   );

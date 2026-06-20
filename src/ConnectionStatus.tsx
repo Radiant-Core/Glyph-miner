@@ -1,25 +1,20 @@
-import { Box, BoxProps } from "@chakra-ui/react";
+import { BoxProps } from "@chakra-ui/react";
+import { useSignals } from "@preact/signals-react/runtime";
 import { ServerStatus, serverStatus } from "./client";
+import StatusPill, { PillTone } from "./components/StatusPill";
 
-const statusText = {
-  [ServerStatus.CONNECTED]: { color: "lightGreen.A200", text: "Connected" },
-  [ServerStatus.DISCONNECTED]: { color: "red.200", text: "Disconnected" },
-  [ServerStatus.CONNECTING]: { color: "yellow.200", text: "Connecting" },
+const statusMap: Record<ServerStatus, { tone: PillTone; text: string }> = {
+  [ServerStatus.CONNECTED]: { tone: "positive", text: "Connected" },
+  [ServerStatus.DISCONNECTED]: { tone: "negative", text: "Disconnected" },
+  [ServerStatus.CONNECTING]: { tone: "warning", text: "Connecting" },
 };
 
 export default function ConnectionStatus(props: BoxProps) {
-  const status = statusText[serverStatus.value];
+  useSignals();
+  const status = statusMap[serverStatus.value];
   return (
-    <Box
-      color={status.color}
-      bgColor="blackAlpha.400"
-      px={2}
-      py={1}
-      mr={2}
-      fontSize="medium"
-      {...props}
-    >
+    <StatusPill tone={status.tone} dot {...props}>
       {status.text}
-    </Box>
+    </StatusPill>
   );
 }

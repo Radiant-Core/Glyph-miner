@@ -1,40 +1,31 @@
 import { Box, Container, Flex } from "@chakra-ui/react";
-import Balance from "./Balance";
 import ConnectionStatus from "./ConnectionStatus";
+import BalanceBadge from "./BalanceBadge";
 
 // Bottom bar is only shown on mobile since not everything can fit in the top bar
 export default function BottomBar() {
   return (
     <Box
-      bg="bg.400"
+      bg="surface.bar"
       position="fixed"
       width="100vw"
       bottom={0}
+      zIndex={10}
       display={{ base: "block", md: "none" }}
       borderTop="1px solid"
-      borderTopColor="whiteAlpha.100"
+      borderTopColor="border.subtle"
       backdropFilter="blur(12px)"
     >
       <Container
         maxW="container.lg"
         as={Flex}
         alignItems="center"
-        justifyContent="right"
+        justifyContent="flex-end"
+        gap={2}
         py={2}
       >
         <ConnectionStatus />
-        <Box
-          color="lightGreen.A200"
-          bgColor="whiteAlpha.100"
-          px={3}
-          py={1}
-          mr={2}
-          fontSize="sm"
-          fontWeight="semibold"
-          borderRadius="lg"
-        >
-          Balance: <Balance />
-        </Box>
+        <BalanceBadge />
       </Container>
     </Box>
   );

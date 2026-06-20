@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { changeToken } from "../blockchain";
 import {
-  Box, Button, Center, CircularProgress, Container, Flex, Heading,
+  Box, Button, Container, Flex,
   Icon, IconButton, Image, Input, InputGroup, InputLeftElement,
-  Select,
+  Select, Skeleton,
   Table, Tbody, Td, Th, Thead, Tr, Text,
 } from "@chakra-ui/react";
 import { SearchIcon, TriangleDownIcon, TriangleUpIcon, CloseIcon } from "@chakra-ui/icons";
 import { LuRefreshCw } from "react-icons/lu";
+import { TbDatabaseOff } from "react-icons/tb";
 import { Link, useNavigate } from "react-router-dom";
 import { deriveSubContractRefCandidates } from "../utils";
 import { miningEnabled, miningStatus, selectedContract, restApiUrl } from "../signals";
@@ -20,6 +21,11 @@ import {
 } from "../deployments";
 import { fetchToken } from "../glyph";
 import { getAlgorithmName } from "../glyph";
+import PageHeader from "../components/PageHeader";
+import Panel from "../components/Panel";
+import StatusPill, { PillTone } from "../components/StatusPill";
+import MonoTag from "../components/MonoTag";
+import EmptyState from "../components/EmptyState";
 
 type SortField = "ticker" | "algorithm" | "claimed" | "contracts" | "reward";
 type SortDir = "asc" | "desc";
@@ -90,6 +96,12 @@ function TokenIcon({ iconType, iconData, iconUrl }: {
   );
 }
 
+function claimedTone(percentMined: number): PillTone {
+  if (percentMined >= 100) return "negative";
+  if (percentMined >= 75) return "warning";
+  return "neutral";
+}
+
 function SummaryRow({ item, showContracts }: { item: ContractSummaryItem; showContracts: boolean }) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
@@ -139,7 +151,7 @@ function SummaryRow({ item, showContracts }: { item: ContractSummaryItem; showCo
 
   return (
     <Tr
-      _hover={{ bg: "whiteAlpha.50" }}
+      _hover={{ bg: "surface.elevated" }}
       transition="background 0.1s"
       cursor="default"
     >
@@ -149,22 +161,15 @@ function SummaryRow({ item, showContracts }: { item: ContractSummaryItem; showCo
           <Text fontWeight="medium">{item.ticker.substring(0, 20)}</Text>
         </Flex>
       </Td>
-      <Td fontFamily="Source Code Pro Variable, monospace" fontSize="xs" color="gray.400">
-        {item.ref.substring(0, 4)}&middot;{item.ref.substring(60, 64)}
+      <Td>
+        <MonoTag color="text.muted">
+          {item.ref.substring(0, 4)}&middot;{item.ref.substring(60, 64)}
+        </MonoTag>
       </Td>
       <Td isNumeric>
-        <Box
-          as="span"
-          px={2}
-          py={0.5}
-          borderRadius="full"
-          fontSize="xs"
-          fontWeight="semibold"
-          bg={item.percentMined >= 100 ? "red.900" : item.percentMined >= 75 ? "yellow.900" : "whiteAlpha.100"}
-          color={item.percentMined >= 100 ? "red.200" : item.percentMined >= 75 ? "yellow.200" : "inherit"}
-        >
+        <StatusPill tone={claimedTone(item.percentMined)}>
           {item.percentMined.toFixed(2)}%
-        </Box>
+        </StatusPill>
       </Td>
       <Td>{getAlgorithmName(item.algorithm)}</Td>
       {showContracts && <Td isNumeric>{item.contractCount?.toLocaleString()}</Td>}
@@ -185,6 +190,22 @@ function SummaryRow({ item, showContracts }: { item: ContractSummaryItem; showCo
   );
 }
 
+function SkeletonRows({ rows, cols }: { rows: number; cols: number }) {
+  return (
+    <>
+      {Array.from({ length: rows }).map((_, r) => (
+        <Tr key={r}>
+          {Array.from({ length: cols }).map((_, c) => (
+            <Td key={c}>
+              <Skeleton height="16px" borderRadius="md" startColor="bg.300" endColor="bg.50" />
+            </Td>
+          ))}
+        </Tr>
+      ))}
+    </>
+  );
+}
+
 function SortTh({ label, field, cur, dir, onSort, isNumeric = false }: {
   label: string; field: SortField; cur: SortField; dir: SortDir;
   onSort: (f: SortField) => void; isNumeric?: boolean;
@@ -195,10 +216,10 @@ function SortTh({ label, field, cur, dir, onSort, isNumeric = false }: {
       isNumeric={isNumeric}
       cursor="pointer"
       onClick={() => onSort(field)}
-      _hover={{ color: "lightGreen.A200" }}
+      _hover={{ color: "accent.fg" }}
       userSelect="none"
       whiteSpace="nowrap"
-      color={active ? "lightGreen.A200" : undefined}
+      color={active ? "accent.fg" : undefined}
     >
       {label}
       {active && (dir === "asc"
@@ -286,63 +307,53 @@ export default function TokenList() {
     return filtered.every((item) => typeof item.contractCount === "number");
   }, [filtered]);
 
+  const colCount = 6 + (showContractsColumn ? 1 : 0);
+  const isEmpty = !loading && filtered && filtered.length === 0;
+
   return (
     <>
-      <Box bg="bg.300" borderBottom="1px solid" borderBottomColor="whiteAlpha.50">
-        <Container maxW="container.lg">
-          <Flex
-            justifyContent="space-between"
-            h={{ base: "64px", md: "96px" }}
-            alignItems="center"
-          >
-            <Heading size={{ base: "md", md: "lg" }} fontWeight="500" flexGrow={1}>
-              Mining Contracts
-            </Heading>
-            <IconButton
-              icon={<Icon as={LuRefreshCw} />}
-              aria-label="Refresh"
-              onClick={doLoad}
-              display={{ base: "flex", md: "none" }}
-              variant="ghost"
-              size="sm"
-            />
-            <Button
-              onClick={doLoad}
-              leftIcon={<Icon as={LuRefreshCw} />}
-              display={{ base: "none", md: "flex" }}
-              variant="outline"
-              size="sm"
-            >
-              Refresh
-            </Button>
-            <IconButton
-              icon={<CloseIcon />}
-              as={Link}
-              aria-label="Close"
-              to="/"
-              ml={3}
-              variant="ghost"
-              size="sm"
-            />
-          </Flex>
-        </Container>
-      </Box>
+      <PageHeader
+        title="Mining contracts"
+        subtitle={!loading && items ? `${filtered?.length} of ${items.length} contracts` : undefined}
+      >
+        <IconButton
+          icon={<Icon as={LuRefreshCw} />}
+          aria-label="Refresh"
+          onClick={doLoad}
+          display={{ base: "flex", md: "none" }}
+          variant="ghost"
+          size="sm"
+        />
+        <Button
+          onClick={doLoad}
+          leftIcon={<Icon as={LuRefreshCw} />}
+          display={{ base: "none", md: "flex" }}
+          variant="outline"
+          size="sm"
+        >
+          Refresh
+        </Button>
+        <IconButton
+          icon={<CloseIcon />}
+          as={Link}
+          aria-label="Close"
+          to="/"
+          variant="ghost"
+          size="sm"
+        />
+      </PageHeader>
 
       <Container maxW="container.lg" py={6} px={{ base: 2, md: 0 }}>
         <Box mb={4}>
           <Flex gap={3} direction={{ base: "column", md: "row" }} align={{ base: "stretch", md: "center" }}>
             <InputGroup maxW={{ base: "100%", md: "360px" }}>
               <InputLeftElement pointerEvents="none">
-                <SearchIcon color="gray.500" />
+                <SearchIcon color="text.muted" />
               </InputLeftElement>
               <Input
                 placeholder="Search by name, algo, or ID..."
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                bg="bg.100"
-                border="1px solid"
-                borderColor="whiteAlpha.100"
-                _focus={{ borderColor: "lightGreen.A400", bg: "bg.50" }}
                 size="sm"
                 borderRadius="lg"
                 h="40px"
@@ -355,10 +366,6 @@ export default function TokenList() {
               aria-label="Filter by algorithm"
               title="Filter by algorithm"
               maxW={{ base: "100%", md: "220px" }}
-              bg="bg.100"
-              border="1px solid"
-              borderColor="whiteAlpha.100"
-              _focus={{ borderColor: "lightGreen.A400", bg: "bg.50" }}
               size="sm"
               borderRadius="lg"
               h="40px"
@@ -371,17 +378,10 @@ export default function TokenList() {
           </Flex>
         </Box>
 
-        <Box
-          width="100%"
-          overflowX="auto"
-          bg="bg.100"
-          borderRadius="2xl"
-          border="1px solid"
-          borderColor="whiteAlpha.50"
-        >
+        <Panel padded={false} width="100%" overflowX="auto">
           <Table variant="unstyled" size="sm">
             <Thead>
-              <Tr borderBottom="1px solid" borderBottomColor="whiteAlpha.100">
+              <Tr borderBottom="1px solid" borderBottomColor="border.subtle">
                 <SortTh label="Name" field="ticker" cur={sf} dir={sd} onSort={onSort} />
                 <Th>ID</Th>
                 <SortTh label="Claimed" field="claimed" cur={sf} dir={sd} onSort={onSort} isNumeric />
@@ -394,36 +394,25 @@ export default function TokenList() {
               </Tr>
             </Thead>
             <Tbody>
-              {filtered && filtered.map(item => (
+              {loading && <SkeletonRows rows={8} cols={colCount} />}
+              {!loading && filtered && filtered.map(item => (
                 <SummaryRow key={item.ref} item={item} showContracts={showContractsColumn} />
               ))}
             </Tbody>
           </Table>
-        </Box>
 
-        {loading && (
-          <Center my={16}>
-            <CircularProgress
-              isIndeterminate
-              size="80px"
-              color="lightGreen.A200"
-              trackColor="bg.300"
-              thickness={8}
+          {isEmpty && (
+            <EmptyState
+              icon={TbDatabaseOff}
+              title={search ? "No contracts match your search" : "No contracts found"}
+              description={
+                search
+                  ? "Try a different name, algorithm, or ID."
+                  : "Pull to refresh, or check your indexer connection in settings."
+              }
             />
-          </Center>
-        )}
-
-        {!loading && filtered && filtered.length === 0 && (
-          <Center my={16} color="gray.400" fontSize="sm">
-            {search ? "No contracts match your search" : "No contracts found"}
-          </Center>
-        )}
-
-        {!loading && items && (
-          <Box mt={3} color="gray.500" fontSize="xs">
-            {filtered?.length} of {items.length} contracts
-          </Box>
-        )}
+          )}
+        </Panel>
       </Container>
     </>
   );

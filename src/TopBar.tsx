@@ -2,41 +2,27 @@ import { Link } from "react-router-dom";
 import { SettingsIcon } from "@chakra-ui/icons";
 import { Box, Container, Flex, IconButton, Icon } from "@chakra-ui/react";
 import { BiSolidHide } from "react-icons/bi";
-import Balance from "./Balance";
 import Logo from "./Logo";
 import ConnectionStatus from "./ConnectionStatus";
+import BalanceBadge from "./BalanceBadge";
 
 export default function TopBar() {
   return (
     <Box
-      bg="bg.400"
+      bg="surface.bar"
       position="fixed"
       width="100vw"
       top={0}
-      zIndex={1}
+      zIndex={10}
       borderBottom="1px solid"
-      borderBottomColor="whiteAlpha.100"
+      borderBottomColor="border.subtle"
       backdropFilter="blur(12px)"
     >
-      <Container maxW="container.lg" as={Flex} alignItems="center" py={2}>
+      <Container maxW="container.lg" as={Flex} alignItems="center" gap={2} py={2}>
         <Logo />
         <Box flexGrow={1} />
-        <ConnectionStatus display={{ base: "none", md: "flex" }} />
-        <Box
-          color="lightGreen.A200"
-          bgColor="whiteAlpha.100"
-          px={3}
-          py={1}
-          mr={2}
-          fontSize="sm"
-          fontWeight="semibold"
-          borderRadius="lg"
-          display={{ base: "none", md: "flex" }}
-          alignItems="center"
-          gap={1}
-        >
-          Balance: <Balance />
-        </Box>
+        <ConnectionStatus display={{ base: "none", md: "inline-flex" }} />
+        <BalanceBadge display={{ base: "none", md: "block" }} />
         <IconButton
           as={Link}
           to="/quiet"

@@ -1,14 +1,12 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useClipboard } from "@chakra-ui/react";
 import { changeToken } from "../blockchain";
 import {
-  Box,
   Button,
   Container,
-  Flex,
-  Heading,
   Icon,
   IconButton,
+  Skeleton,
   Table,
   Tbody,
   Td,
@@ -23,6 +21,7 @@ import {
   CopyIcon,
 } from "@chakra-ui/icons";
 import { LuRefreshCw } from "react-icons/lu";
+import { TbFileSearch } from "react-icons/tb";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ContractGroup, Contract } from "../types";
 import { miningEnabled, miningStatus, selectedContract } from "../signals";
@@ -31,6 +30,17 @@ import { reverseRef } from "../utils";
 import miner from "../miner";
 import { addMessage } from "../message";
 import { getCachedTokenContracts } from "../deployments";
+import PageHeader from "../components/PageHeader";
+import Panel from "../components/Panel";
+import StatusPill, { PillTone } from "../components/StatusPill";
+import MonoTag from "../components/MonoTag";
+import EmptyState from "../components/EmptyState";
+
+function claimedTone(pct: number): PillTone {
+  if (pct >= 100) return "negative";
+  if (pct >= 75) return "warning";
+  return "neutral";
+}
 
 function ContractRow({ num, contract }: { num: number; contract: Contract }) {
   const navigate = useNavigate();
@@ -48,47 +58,32 @@ function ContractRow({ num, contract }: { num: number; contract: Contract }) {
     navigate("/");
   };
 
+  const pct = Number(maxHeight) > 0 ? (Number(height) / Number(maxHeight)) * 100 : 0;
+
   return (
-    <Tr _hover={{ bg: "whiteAlpha.50" }} transition="background 0.1s">
+    <Tr _hover={{ bg: "surface.elevated" }} transition="background 0.1s">
       <Td fontSize="sm">{num}</Td>
       <Td fontSize="sm">
-        <ShortId id={location} />
+        <MonoTag>
+          <ShortId id={location} />
+        </MonoTag>
         <IconButton
-          display="inline"
+          ml={1}
           onClick={onCopy}
           icon={
             hasCopied ? (
-              <CheckIcon color="lightGreen.A400" />
+              <CheckIcon color="accent.fg" />
             ) : (
-              <CopyIcon color="lightGreen.A400" />
+              <CopyIcon color="accent.fg" />
             )
           }
           variant="ghost"
-          aria-label="Copy"
+          aria-label="Copy location"
           size="xs"
         />
       </Td>
       <Td isNumeric fontSize="sm">
-        <Box
-          as="span"
-          px={2}
-          py={0.5}
-          borderRadius="full"
-          fontSize="xs"
-          fontWeight="semibold"
-          bg={
-            Number(height) >= Number(maxHeight) ? "red.900" :
-            (Number(height) / Number(maxHeight)) >= 0.75 ? "yellow.900" :
-            "whiteAlpha.100"
-          }
-          color={
-            Number(height) >= Number(maxHeight) ? "red.200" :
-            (Number(height) / Number(maxHeight)) >= 0.75 ? "yellow.200" :
-            "inherit"
-          }
-        >
-          {((Number(height) / Number(maxHeight)) * 100).toFixed(2)}%
-        </Box>
+        <StatusPill tone={claimedTone(pct)}>{pct.toFixed(2)}%</StatusPill>
       </Td>
       <Td isNumeric>
         <Button size="xs" onClick={load} variant="outline">Load</Button>
@@ -102,79 +97,76 @@ export default function ContractList() {
   const [contractGroup, setContractGroup] = useState<
     ContractGroup | null | undefined
   >(null);
-  useEffect(() => {
+
+  const doLoad = useCallback(() => {
     setContractGroup(null);
     (async () => {
       const gr = await getCachedTokenContracts(firstRef || "");
-      if (gr) {
-        setContractGroup(gr);
-      } else {
-        setContractGroup(undefined);
-      }
+      setContractGroup(gr || undefined);
     })();
   }, [firstRef]);
 
+  useEffect(() => { doLoad(); }, [doLoad]);
+
+  const loading = contractGroup === null;
+
   return (
     <>
-      <Box bg="bg.300" borderBottom="1px solid" borderBottomColor="whiteAlpha.50">
-        <Container maxW="container.lg">
-          <Flex
-            justifyContent="space-between"
-            h={{ base: "64px", md: "96px" }}
-            alignItems="center"
-          >
-            <Heading
-              size={{ base: "md", md: "lg" }}
-              fontWeight="500"
-              flexGrow={1}
-            >
-              {contractGroup === undefined
-                ? "Unknown token"
-                : (contractGroup?.glyph.payload.ticker as string) || ""}
-            </Heading>
-            <IconButton
-              icon={<Icon as={LuRefreshCw} />}
-              aria-label="Refresh list"
-              display={{ base: "flex", md: "none" }}
-              variant="ghost"
-              size="sm"
-            />
-            <Button
-              as={Link}
-              to="/tokens"
-              leftIcon={<ArrowBackIcon />}
-              display={{ base: "none", md: "flex" }}
-              variant="outline"
-              size="sm"
-            >
-              Back
-            </Button>
-            <IconButton
-              icon={<CloseIcon />}
-              as={Link}
-              aria-label="Close"
-              to="/"
-              ml={3}
-              variant="ghost"
-              size="sm"
-            />
-          </Flex>
-        </Container>
-      </Box>
+      <PageHeader
+        title={
+          contractGroup === undefined
+            ? "Unknown token"
+            : (contractGroup?.glyph.payload.ticker as string) || "Sub-contracts"
+        }
+        subtitle="Sub-contracts"
+      >
+        <IconButton
+          icon={<Icon as={LuRefreshCw} />}
+          aria-label="Refresh list"
+          onClick={doLoad}
+          display={{ base: "flex", md: "none" }}
+          variant="ghost"
+          size="sm"
+        />
+        <Button
+          as={Link}
+          to="/tokens"
+          leftIcon={<ArrowBackIcon />}
+          display={{ base: "none", md: "flex" }}
+          variant="outline"
+          size="sm"
+        >
+          Back
+        </Button>
+        <IconButton
+          icon={<CloseIcon />}
+          as={Link}
+          aria-label="Close"
+          to="/"
+          variant="ghost"
+          size="sm"
+        />
+      </PageHeader>
 
       <Container maxW="container.lg" py={6} px={{ base: 2, md: 0 }}>
-        {contractGroup && (
-          <Box
-            width="100%"
-            overflowX="auto"
-            bg="bg.100"
-            borderRadius="2xl"
-            border="1px solid"
-            borderColor="whiteAlpha.50"
-          >
+        {contractGroup === undefined ? (
+          <Panel padded={false}>
+            <EmptyState
+              icon={TbFileSearch}
+              title="Token not found"
+              description="No sub-contracts could be loaded for this token reference."
+              action={
+                <Button as={Link} to="/tokens" variant="outline" size="sm">
+                  Back to contracts
+                </Button>
+              }
+            />
+          </Panel>
+        ) : (
+          <Panel padded={false} width="100%" overflowX="auto">
             <Table variant="unstyled" size="sm">
               <Thead>
-                <Tr borderBottom="1px solid" borderBottomColor="whiteAlpha.100">
+                <Tr borderBottom="1px solid" borderBottomColor="border.subtle">
                   <Th>#</Th>
                   <Th>Location</Th>
                   <Th isNumeric>Claimed</Th>
@@ -182,7 +174,17 @@ export default function ContractList() {
                 </Tr>
               </Thead>
               <Tbody>
-                {contractGroup &&
+                {loading &&
+                  Array.from({ length: 6 }).map((_, r) => (
+                    <Tr key={r}>
+                      {Array.from({ length: 4 }).map((_, c) => (
+                        <Td key={c}>
+                          <Skeleton height="16px" borderRadius="md" startColor="bg.300" endColor="bg.50" />
+                        </Td>
+                      ))}
+                    </Tr>
+                  ))}
+                {!loading &&
                   contractGroup.contracts.map((contract, num) => (
                     <ContractRow
                       key={contract.contractRef}
@@ -192,7 +194,7 @@ export default function ContractList() {
                   ))}
               </Tbody>
             </Table>
-          </Box>
+          </Panel>
         )}
       </Container>
     </>

@@ -23,6 +23,21 @@ export const miningStatus = signal<"stop" | "change" | "mining" | "ready">( // T
 );
 export const loadingContract = signal(false);
 
+// Aggregate mint progress across ALL of the current token's sub-contracts
+// (sourced from the indexer's token summary). Lets the UI show whole-token
+// progress instead of just the single sub-contract being mined, which is
+// misleading when a token is split across many contracts. `undefined` when
+// the aggregate is unknown (offline / single-contract / not yet fetched).
+export const tokenSupply = signal<
+  | {
+      minedSupply: number;
+      totalSupply: number;
+      percentMined: number;
+      contracts: number;
+    }
+  | undefined
+>(undefined);
+
 // Settings
 export const mineToAddress = signal("");
 export const mintMessage = signal("");

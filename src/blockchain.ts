@@ -15,6 +15,7 @@ import {
   mintMessage,
   rejected,
   selectedContract,
+  tokenSupply,
   utxos,
   wallet,
   work,
@@ -31,8 +32,38 @@ import {
 import { broadcast, client, fetchRef, fetchTx } from "./client";
 import { Contract, Work, Utxo, AlgorithmId } from "./types";
 import { FEE_PER_KB } from "./constants";
-import { fetchContract as fetchContractFromApi } from "./dmint-api";
+import {
+  fetchContract as fetchContractFromApi,
+  fetchTokenSupply,
+} from "./dmint-api";
 import { normalizeNonceHexForScriptSig } from "./nonce";
+
+// Tracks which token the `tokenSupply` aggregate currently belongs to (LE token
+// ref). Used to clear a stale aggregate on token SWITCH while avoiding a flicker
+// when the same token is merely re-loaded (recoverFromError, contract moves).
+let tokenSupplyRef = "";
+
+/**
+ * Refresh the indexer-sourced whole-token mint aggregate for the given token
+ * (LE ref, as stored on the contract). On a token switch the previous
+ * aggregate is cleared immediately; the network result then fills it in (or
+ * leaves it undefined so the UI falls back to the single-contract view).
+ */
+function refreshTokenSupply(tokenRefLe: string) {
+  const isNewToken = tokenSupplyRef !== tokenRefLe;
+  if (isNewToken) {
+    tokenSupply.value = undefined;
+    tokenSupplyRef = tokenRefLe;
+  }
+  fetchTokenSupply(reverseRef(tokenRefLe))
+    .then((supply) => {
+      // Ignore a late response if the user has since switched tokens.
+      if (tokenSupplyRef === tokenRefLe && supply) tokenSupply.value = supply;
+    })
+    .catch(() => {
+      /* keep prior aggregate (or the cleared undefined) on failure */
+    });
+}
 
 // Map API algorithm ID to AlgorithmId string (0/1/2 only for now)
 function mapAlgorithmId(apiAlgo: number): AlgorithmId {
@@ -1713,6 +1744,9 @@ export async function changeToken(ref: string) {
   // a stop instead of resetting every recovery cycle.
   resetMintProgress(token.contract.contractRef, token.contract.height);
   glyph.value = token.glyph;
+  // Pull the whole-token mint aggregate so the UI can show progress across all
+  // of this token's sub-contracts rather than just this one.
+  refreshTokenSupply(token.contract.tokenRef);
   updateWork();
 
   if (token.contract.height === token.contract.maxHeight) {
@@ -1807,6 +1841,9 @@ async function updateContract() {
 
     if (parsed?.state === "active") {
       contract.value = parsed.params;
+      // A confirmed mint moved the contract — refresh the whole-token aggregate
+      // (throttled in dmint-api so this is cheap on rapid moves).
+      refreshTokenSupply(parsed.params.tokenRef);
       if (miningStatus.value === "mining") {
         miningStatus.value = "change";
       }
