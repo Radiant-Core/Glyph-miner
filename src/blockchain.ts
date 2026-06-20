@@ -568,19 +568,25 @@ export function computeAsertV2Target(
   return newTarget;
 }
 
+/**
+ * LEGACY LWMA (memoryless single-sample unity-gain `target × delta / targetTime`).
+ * Governs `lwma` tokens deployed BEFORE the 2026-06-19 LWMA-v2 upgrade — their
+ * immutable codeScript carries this formula, so the miner MUST keep using it for
+ * them or PartC OP_EQUALVERIFY rejects the mint. New tokens use
+ * computeLinearV2Target. Selection is by the lwmaVersion the parser detects from
+ * the codeScript shape.
+ */
 export function computeLinearTarget(
   oldTarget: bigint,
   lastTime: bigint,
   currentTime: bigint,
   targetTime: bigint,
 ): bigint {
-  // Mirrors Photonic-Wallet buildLinearDaaBytecode() after the §S-CRIT-3 fix:
+  // Mirrors the legacy Photonic-Wallet buildLinearDaaBytecode():
   //   1. Cap timeDelta to 4 × targetTime  (matches ASERT drift range).
   //   2. Cap target to MAX_TARGET/4       (keeps the OP_MUL within int64).
   //   3. Divide-first: (target_capped / targetTime) × cappedDelta.
   //   4. Final defensive MIN with MAX_TARGET.
-  // Without these caps the on-chain OP_MUL aborts at default difficulty
-  // (oldTarget ≈ MAX_TARGET/10) and broadcast fails OP_EQUALVERIFY.
   let cappedDelta = currentTime - lastTime;
   const deltaCap = 4n * targetTime;
   if (cappedDelta > deltaCap) cappedDelta = deltaCap;
@@ -592,6 +598,26 @@ export function computeLinearTarget(
   if (newTarget > MAX_TARGET) newTarget = MAX_TARGET;
   if (newTarget < 1n) newTarget = 1n;
   return newTarget;
+}
+
+/**
+ * LWMA-v2: damped fractional single-sample retarget. Exact mirror of Photonic-
+ * Wallet dmintDaaV2.ts computeLwmaV2Target and the on-chain buildLinearDaaBytecode.
+ * It is computeAsertV2Target with the responsiveness gain auto-set to targetTime
+ * (instead of a separate halfLife), so a 2×-target block hits the ±25%/block clamp:
+ *
+ *   driftFp = (excess * RADIX) / targetTime   // gain = 1/targetTime
+ *
+ * Overflow-safe by the same proof as ASERT-v2 (targetTime ≥ 1 is deploy-enforced).
+ */
+export function computeLinearV2Target(
+  oldTarget: bigint,
+  lastTime: bigint,
+  currentTime: bigint,
+  targetTime: bigint,
+): bigint {
+  const tt = targetTime < 1n ? 1n : targetTime;
+  return computeAsertV2Target(oldTarget, lastTime, currentTime, tt, tt);
 }
 
 /**
@@ -807,12 +833,14 @@ export function buildNextContractState(
               halfLife,
             );
     } else if (contract.daaMode === "lwma") {
-      newTarget = computeLinearTarget(
-        oldTarget,
-        lastTime,
-        currentTime,
-        targetTime,
-      );
+      // lwmaVersion is detected from the codeScript shape by the parser, same as
+      // ASERT. Default to legacy for any contract the parser didn't tag so an
+      // already-deployed lwma token is never mined with the wrong formula.
+      const lwmaVersion = Number(contract.daaParams?.lwmaVersion ?? 1);
+      newTarget =
+        lwmaVersion >= 2
+          ? computeLinearV2Target(oldTarget, lastTime, currentTime, targetTime)
+          : computeLinearTarget(oldTarget, lastTime, currentTime, targetTime);
     } else if (contract.daaMode === "epoch") {
       const epochLength = BigInt(contract.daaParams?.epochLength || 2016);
       const maxAdjustmentLog2 = epochMaxAdjustmentToLog2(

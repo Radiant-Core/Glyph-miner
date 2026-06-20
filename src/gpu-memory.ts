@@ -43,7 +43,7 @@ export async function getGPUMemoryInfo(adapter: GPUAdapter): Promise<GPUMemoryIn
       vendor = info.vendor || 'Unknown';
       model = info.architecture || 'Unknown';
     }
-  } catch (e) {
+  } catch {
     // Fallback to generic detection
     vendor = 'Unknown';
     model = 'Unknown';

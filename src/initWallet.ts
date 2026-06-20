@@ -11,7 +11,7 @@ import {
   wallet,
 } from "./signals";
 import { createWallet, openWallet } from "./wallet";
-import { isMainnet, networkDefaultServers } from "./network";
+import { dropLoopbackServers, isMainnet, networkDefaultServers } from "./network";
 
 // Server ordering matters for V2 (BLAKE3/K12) dMint contracts. ElectrumX
 // just forwards `transaction.broadcast` to the node behind it; the script
@@ -112,9 +112,17 @@ if (!isMainnet && networkDefaultServers) {
       const list = Array.isArray(parsed) && parsed.length > 0
         ? parsed
         : defaultServers.slice();
+      // Self-heal: a regtest build (VITE_NETWORK=regtest leaking via .env.local)
+      // overwrites this mainnet user's stored list with a loopback indexer
+      // (ws://localhost:50020). Drop any loopback endpoints so mainnet users
+      // recover automatically — and stop the browser's "access other apps on
+      // this device" (local network) prompt. If that empties the list, fall
+      // back to the curated defaults.
+      const scrubbed = dropLoopbackServers(list);
+      const base = scrubbed.length > 0 ? scrubbed : defaultServers.slice();
       // Rewrite any legacy direct-port radiantcore endpoints → :443 and persist
       // so the fix sticks across sessions.
-      const upgraded = upgradeServers(list);
+      const upgraded = upgradeServers(base);
       servers.value = upgraded;
       if (
         upgraded.length !== list.length ||

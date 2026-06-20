@@ -40,6 +40,7 @@ import { Script } from "@radiant-core/radiantjs";
 import { Link } from "react-router-dom";
 import { connect } from "../client";
 import { sweepWallet } from "../sweep";
+import { NETWORK_STORAGE_KEY, networkName } from "../network";
 
 const parseServers = (value: string): string[] =>
   value
@@ -89,6 +90,7 @@ export default function Settings() {
     contractsUrl: contractsUrl.value,
     restApiUrl: restApiUrl.value,
     useIndexerApi: useIndexerApi.value ? "1" : "",
+    network: networkName,
   });
   const onFormChange = ({
     target: { name, value },
@@ -114,6 +116,32 @@ export default function Settings() {
   const onSave = (event: React.FormEvent) => {
     event.preventDefault();
     setError("");
+
+    // Network change requires a reload: the radiantjs network (key/address
+    // derivation) and the default server list are resolved once at module
+    // load. Persist the choice, clear the stored server list so the new
+    // network's defaults seed cleanly on reload, then reload. Mainnet is the
+    // default and clears the override entirely.
+    if (form.network !== networkName) {
+      const proceed = window.confirm(
+        `Switch network to ${form.network}? The app will reload and your ` +
+          `temporary wallet address will change to the ${form.network} ` +
+          `format. Mainnet is the default — only switch if you are testing ` +
+          `against a local regtest/testnet stack.`
+      );
+      if (!proceed) return;
+      if (form.network === "mainnet") {
+        localStorage.removeItem(NETWORK_STORAGE_KEY);
+      } else {
+        localStorage.setItem(NETWORK_STORAGE_KEY, form.network);
+      }
+      // Drop the stored server list so initWallet re-seeds the new network's
+      // defaults (the curated mainnet list, or the loopback regtest indexer).
+      localStorage.removeItem("servers");
+      window.location.reload();
+      return;
+    }
+
     try {
       Script.buildPublicKeyHashOut(form.mineToAddress).toHex();
     } catch {
@@ -251,6 +279,25 @@ export default function Settings() {
             </Select>
             <FormHelperText fontSize="xs">
               When enabled, miner mutates mint-message entropy and continues after exhausting 32-bit nonce space.
+            </FormHelperText>
+          </FormControl>
+          <FormControl mb={5}>
+            <FormLabel fontWeight="semibold" fontSize="sm">Network</FormLabel>
+            <Select
+              name="network"
+              defaultValue={form.network}
+              onChange={onFormChange}
+              title="Network"
+            >
+              <option value="mainnet">Mainnet (default)</option>
+              <option value="testnet">Testnet</option>
+              <option value="regtest">Regtest (local testing)</option>
+            </Select>
+            <FormHelperText fontSize="xs">
+              Mainnet is the default. Regtest/testnet are for local testing
+              against a stack on{" "}
+              <Code fontSize="xs">ws://localhost:50020</Code> and reload the app
+              when changed.
             </FormHelperText>
           </FormControl>
           <FormControl mb={5}>

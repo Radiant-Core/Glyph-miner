@@ -563,6 +563,9 @@ describe('parseContractTx extracts DAA params from codescript (mainnet ASERT bug
     const tx = { id: 'cc'.repeat(32), outputs: [{ script: Script.fromHex(script) }] };
     const parsed = await parseContractTx(tx as any, CONTRACT_REF);
     const contract = (parsed as { state: 'active'; params: Contract }).params;
-    expect(contract.daaParams).toBeUndefined();
+    // LWMA carries no deploy-time constants beyond targetTime, but the parser now
+    // tags the DAA version (legacy single-sample vs v2 damped) so the miner mirrors
+    // the right formula. LWMA_DAA is the legacy fixture → version 1.
+    expect(contract.daaParams).toEqual({ lwmaVersion: 1 });
   });
 });

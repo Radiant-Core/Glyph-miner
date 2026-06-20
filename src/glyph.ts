@@ -510,9 +510,13 @@ export function extractDaaParamsFromCodeScript(
   }
 
   if (daaMode === "lwma") {
-    // LWMA has no deploy-time constants beyond targetTime, which already
-    // lives in the state script. Nothing to extract.
-    return undefined;
+    // LWMA has no deploy-time constants beyond targetTime (already in the state
+    // script), but we DO need to tell the v2 damped-fractional bytecode apart from
+    // the legacy single-sample one so the miner mirrors the right formula.
+    // v2 signature: common prefix + RADIX push (03000001) + OP_MUL (95) + OP_3 PICK
+    // targetTime (5379) + OP_DIV (96). Legacy had `…5379 54 95 a3` (4×targetTime cap).
+    const v2Sig = "c5527994537994" + "03000001" + "95" + "5379" + "96";
+    return { lwmaVersion: lower.includes(v2Sig) ? 2 : 1 };
   }
 
   if (daaMode === "epoch") {

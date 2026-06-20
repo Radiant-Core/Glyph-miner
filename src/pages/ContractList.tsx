@@ -112,7 +112,7 @@ export default function ContractList() {
         setContractGroup(undefined);
       }
     })();
-  }, []);
+  }, [firstRef]);
 
   return (
     <>
